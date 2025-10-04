@@ -1,0 +1,992 @@
+const express = require('express');
+require('dotenv').config();
+const nodemailer = require('nodemailer');
+const billboardRoutes = require('./routes/billboards');
+const authRoutes = require('./routes/auth');
+const emailRoutes = require('./routes/email');
+const gstRoutes = require('./routes/gst');
+const multer = require('multer');
+const prisma = require('./db/db');
+const cloudinary = require('./config/cloudinary');
+const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET;
+const axios = require('axios');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+
+const userRoutes = require('./routes/userRoutes');
+const customerRoutes = require('./routes/customers');
+
+const app = express();
+app.use(express.json());
+
+app.use(bodyParser.json());
+ app.use(cors({ origin: ['http://localhost:3000','http://localhost:8080','https://www.adscapebillboards.com','https://billboard-frontend-development.vercel.app','https://billboard-admin-x.vercel.app','http://localhost:5173','http://localhost:5174','https://adscape-player.vercel.app'] }));
+
+let counter = 0;
+
+app.get('/api/data', (req, res) => {
+  counter++;
+  res.json({ message: 'Here is some data', counter });
+});
+
+// POST /api/update
+app.post('/api/update', (req, res) => {
+  const payload = req.body;
+  console.log(`[POST] Received data:`, payload);
+  res.json({ status: 'success', received: payload });
+});
+
+
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token provided' });
+  
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (err) return res.status(403).json({ error: 'Invalid token' });
+      req.user = user;
+      next();
+    });
+  };
+
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+app.use(express.json());
+
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
+
+app.use('/api', userRoutes);
+app.use('/api/customers', customerRoutes);
+
+
+
+app.use('/billboards', billboardRoutes);
+
+app.use('/auth', authRoutes);
+app.use('/email', emailRoutes);
+
+
+app.get('/api/userbillboards',async (req, res) => {
+  const { userEmail } = req.query;
+
+  try {
+    const billboards = await prisma.billboard.findMany({
+      where: {
+        OR: [
+          {
+            user: {
+              email: userEmail
+            }
+          },
+          {
+            publisher: {
+              email: userEmail
+            }
+          }
+        ]
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            fullName: true
+          }
+        },
+        publisher: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      },
+      orderBy: {
+        id: 'desc'
+      }
+    });
+
+    res.json(billboards);
+  } catch (error) {
+    console.error('Error fetching billboards:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'srinnivassh@gmail.com', // your Gmail
+    pass: 'jjcg edwl picz rrqw',    // your app password (not Gmail password)
+  },
+});
+
+// Endpoint to receive form data and send email
+app.post('/send-email', (req, res) => {
+  const { name, email, phone, company, message } = req.body;
+
+  const mailOptions = {
+    from: `"${name}" <${email}>`,
+    to: 'sabharishhari@gmail.com', // where you want to send the email
+    subject: 'New Contact Form Submission',
+    html: `
+      <h3>Contact Details</h3>
+      <p><strong>Name:</strong> ${name}</p>
+      <p><strong>Email:</strong> ${email}</p>
+      <p><strong>Phone:</strong> ${phone}</p>
+      <p><strong>Company:</strong> ${company}</p>
+      <p><strong>Message:</strong> ${message}</p>
+    `,
+  };
+
+  transporter.sendMail(mailOptions, (error, info) => {
+    if (error) {
+      console.error('Error sending email:', error);
+      res.status(500).json({ success: false, message: 'Failed to send email' });
+    } else {
+      console.log('Email sent:', info.response);
+      res.status(200).json({ success: true, message: 'Email sent successfully' });
+    }
+  });
+});
+
+
+app.delete('/billboards/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { rowCount } = await pool.query('DELETE FROM billboards WHERE id = $1', [id]);
+
+    if (rowCount === 0) {
+      return res.status(404).json({ error: 'Billboard not found' });
+    }
+
+    res.status(200).json({ message: 'Billboard deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting billboard:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/create-campaign', upload.array('files'), async (req, res) => {
+  try {
+    const { userName, billboards } = JSON.parse(req.body.data);
+    const uploadedFiles = req.files;
+    console.log('Received files:', userName,billboards); // 👀
+    
+
+    const campaignId = uuidv4(); // ✅ Generate unique ID
+
+    const enrichedBillboards = await Promise.all(billboards.map(async (billboard) => {
+      const { id, location, city, pricePerDay, bookingDetails,owner,screen_id } = billboard;
+      const { startDate, endDate } = bookingDetails;
+
+      const fileUrls = [];
+
+      const matchingFiles = uploadedFiles.filter(file =>
+        file.originalname.startsWith(`${id}_`)
+      );
+
+      const streamUpload = (fileBuffer) => {
+        return new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { resource_type: 'image' },
+            (error, result) => {
+              if (error) return reject(error);
+              resolve(result.secure_url);
+            }
+          );
+          stream.end(fileBuffer);
+        });
+      };
+
+      for (const file of matchingFiles) {
+        try {
+          const url = await streamUpload(file.buffer);
+          fileUrls.push(url);
+        } catch (error) {
+          console.error(`❌ Failed to upload file ${file.originalname}:`, error.message);
+        }
+      }
+
+      return {
+        id,
+        location,
+        city,
+        pricePerDay,
+        bookingDetails: {
+          startDate,
+          endDate
+        },
+        files: fileUrls,
+        owner,
+        screen_id,
+        // Campaign-related information for each billboard
+        userName: userName,
+        status: "PENDING",
+        createDate: new Date().toISOString(),
+        endDate: endDate,
+        billboardCampaignId: `${campaignId}_${id}`, // Generate unique billboard campaign ID
+        // Keep all existing billboard details
+        ...billboard
+      };
+    }));
+
+    const startDate = enrichedBillboards[0]?.bookingDetails.startDate;
+    const endDate = enrichedBillboards[0]?.bookingDetails.endDate;
+
+    // Calculate totalAmount
+    const totalAmount = enrichedBillboards.reduce((sum, b) => {
+      const days = (new Date(b.bookingDetails.endDate) - new Date(b.bookingDetails.startDate)) / (1000 * 60 * 60 * 24) + 1;
+      return sum + (days * b.pricePerDay);
+    }, 0);
+
+    await pool.query(
+      `INSERT INTO campaigns (id, user_name, campaign_name, status, total_amount, start_date, end_date, billboards)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        campaignId, // 👈 save the generated ID
+        userName,
+        "Auto Campaign",
+        "pending",
+        totalAmount,
+        startDate,
+        endDate,
+        JSON.stringify(enrichedBillboards)
+      ]
+    );
+
+    res.status(201).json({ 
+      message: 'Campaign created successfully.',
+      id: campaignId // 👈 send ID back in response
+    });
+
+  } catch (err) {
+    console.error('❌ Error creating campaign:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+
+app.get('/api/campaigns', async (req, res) => {
+  const { user } = req.query;
+  console.log('User from query:', user); // 👀
+  
+  try {
+    const result = await pool.query(
+      'SELECT * FROM campaigns WHERE user_name = $1 ORDER BY created_at DESC',
+      [user]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ Error fetching campaigns:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+
+
+app.put('/api/campaigns/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  try {
+    const result = await pool.query(
+      'UPDATE campaigns SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [status, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    const updatedCampaign = result.rows[0];
+
+    if (status === 'approved') {
+      await generateSlots(updatedCampaign);
+    }
+
+    res.json({ message: 'Status updated', campaign: updatedCampaign });
+  } catch (err) {
+    console.error('❌ Error updating status:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+
+
+app.get('/api/campaignsu', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM campaigns ORDER BY created_at DESC'
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ Error fetching campaigns:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+app.get('/api/campaignsuz', async (req, res) => {
+  const { userEmail } = req.query;
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        c.*
+      FROM campaigns c
+      WHERE EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(c.billboards::jsonb) AS elem
+        JOIN billboards b ON b.id::text = elem->>'id'
+        WHERE b.user_id = $1
+      )
+      ORDER BY c.created_at DESC
+    `, [userEmail]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching user campaigns:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+
+
+
+
+app.put('/api/update-campaign-name', async (req, res) => {
+  console.log('Incoming body:', req.body);
+  try {
+    const { campaignId, campaignName } = req.body;
+console.log('Received:', { campaignId, campaignName });
+  // 👀
+
+
+    if (!campaignId || !campaignName) {
+      return res.status(400).json({ message: 'Campaign ID and name are required' });
+    }
+
+    const result = await pool.query(
+      'UPDATE campaigns SET campaign_name = $1 WHERE id = $2 RETURNING *',
+      [campaignName, campaignId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'Campaign not found' });
+    }
+
+    res.status(200).json({ message: 'Campaign name updated successfully', campaign: result.rows[0] });
+  } catch (err) {
+    console.error('Update campaign name error:', err);
+    res.status(500).json({ message: 'Failed to update campaign name' });
+  }
+});
+
+
+app.get('/api/slota', async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT * FROM generated_slots`);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching slots:', err);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+
+
+app.get('/api/billboards', async (req, res) => {
+  const billboards = await pool.query('SELECT id, name FROM billboards');
+  res.json(billboards.rows);
+});
+
+
+async function generateSlots(campaign) {
+  const isTest= true
+  const billboards = campaign.billboards;
+
+  if (!Array.isArray(billboards)) {
+    console.warn("❗ Billboards data missing or not an array");
+    return;
+  }
+
+  for (const billboard of billboards) {
+    const billboardId = billboard.id;
+    const assetUrl = billboard.files?.[0];
+    const screen_id = billboard.screen_id;
+    const { startDate, endDate } = billboard.bookingDetails;
+
+    if (!startDate || !endDate || !assetUrl) {
+      console.warn(`⚠️ Missing data for billboard ${billboardId}`);
+      continue;
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    // ✅ TEST SLOT: Generate slot on current date regardless of booking period
+    if (isTest) {
+      const today = new Date();
+      const dateStr = today.toISOString().slice(0, 10);
+
+      const countResult = await pool.query(
+        `SELECT COUNT(*) FROM generated_slots
+         WHERE billboard_id = $1 AND DATE(start_date) = $2`,
+        [billboardId, dateStr]
+      );
+
+      const slotCount = parseInt(countResult.rows[0].count);
+
+      if (slotCount < 8) {
+        const slotId = uuidv4();
+        const slotNumber = slotCount + 1;
+        const slotStart = new Date(`${dateStr}T00:00:00Z`);
+        const slotEnd = new Date(`${dateStr}T23:59:59Z`);
+
+        await pool.query(
+          `INSERT INTO generated_slots 
+           (id, campaign_id, billboard_id, asset_url, start_date, end_date, duration, slot_number, screen_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            slotId,
+            campaign.id,
+            billboardId,
+            assetUrl,
+            slotStart,
+            slotEnd,
+            1,
+            slotNumber,
+            screen_id
+          ]
+        );
+
+        console.log(`✅ TEST slot #${slotNumber} created for ${billboardId} on ${dateStr}`);
+      } else {
+        console.log(`⛔ TEST skipped: ${billboardId} already has 8 slots today`);
+      }
+    }
+
+    // 🔁 Real campaign slot generation logic
+    for (
+      let current = new Date(start);
+      current <= end;
+      current.setDate(current.getDate() + 1)
+    ) {
+      const dateStr = current.toISOString().slice(0, 10);
+
+      const countResult = await pool.query(
+        `SELECT COUNT(*) FROM generated_slots
+         WHERE billboard_id = $1 AND DATE(start_date) = $2`,
+        [billboardId, dateStr]
+      );
+
+      const slotCount = parseInt(countResult.rows[0].count);
+
+      if (slotCount >= 8) {
+        console.log(`⛔ Skipped: ${billboardId} already has 8 slots on ${dateStr}`);
+        continue;
+      }
+
+      const slotId = uuidv4();
+      const slotNumber = slotCount + 1;
+
+      const slotStart = new Date(`${dateStr}T00:00:00Z`);
+      const slotEnd = new Date(`${dateStr}T23:59:59Z`);
+
+      await pool.query(
+        `INSERT INTO generated_slots 
+         (id, campaign_id, billboard_id, asset_url, start_date, end_date, duration, slot_number, screen_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          slotId,
+          campaign.id,
+          billboardId,
+          assetUrl,
+          slotStart,
+          slotEnd,
+          1,
+          slotNumber,
+          screen_id
+        ]
+      );
+
+      console.log(`🆕 Slot #${slotNumber} for ${billboardId} on ${dateStr}`);
+    }
+  }
+}
+
+// GET /api/assets/:screen_id
+app.get('/api/assets/:screen_id', async (req, res) => {
+  const { screen_id } = req.params;
+  const today = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+
+  try {
+    const result = await pool.query(
+      `SELECT asset_url, slot_number FROM generated_slots
+       WHERE screen_id = $1 AND DATE(start_date) <= $2 AND DATE(end_date) >= $2
+       ORDER BY slot_number ASC`,
+      [screen_id, today]
+    );
+
+    res.json(result.rows);
+    console.log(`📦 Assets for screen ${screen_id} on ${today}:`, result.rows);
+  } catch (err) {
+    console.error("❌ DB error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
+app.post("/api/track-play", async (req, res) => {
+  const { screen_id, asset_url, played_at } = req.body;
+
+  try {
+    const timestamp = played_at ? new Date(played_at) : new Date();
+    const playDate = timestamp.toISOString().split("T")[0]; // YYYY-MM-DD
+
+    // 🔍 Fetch campaign_id from generated_slots
+    const campaignResult = await pool.query(
+      `SELECT campaign_id FROM generated_slots
+       WHERE screen_id = $1 AND asset_url = $2
+       AND DATE(start_date) <= $3 AND DATE(end_date) >= $3
+       LIMIT 1`,
+      [screen_id, asset_url, playDate]
+    );
+
+    const campaign_id = campaignResult.rows[0]?.campaign_id || null;
+
+    // 📝 Save detailed play log
+    await pool.query(
+      `INSERT INTO asset_play_logs (screen_id, asset_url, campaign_id, played_at)
+       VALUES ($1, $2, $3, $4)`,
+      [screen_id, asset_url, campaign_id, timestamp]
+    );
+
+    // 🔄 Update daily count
+    await pool.query(
+      `INSERT INTO asset_plays (screen_id, asset_url, campaign_id, play_date, play_count)
+       VALUES ($1, $2, $3, $4, 1)
+       ON CONFLICT (screen_id, asset_url, campaign_id, play_date)
+       DO UPDATE SET play_count = asset_plays.play_count + 1`,
+      [screen_id, asset_url, campaign_id, playDate]
+    );
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ DB error:", err);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+
+app.get("/api/asset-logs", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT screen_id, asset_url, played_at
+      FROM asset_play_logs
+      ORDER BY played_at DESC
+      LIMIT 50
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ Error fetching logs:", err);
+    res.status(500).send("Server Error");
+  }
+});
+
+app.get("/api/campaign-metrics/:campaignId", async (req, res) => {
+  const { campaignId } = req.params;
+
+  try {
+    // Fetch total displays per day for this campaign
+    const [daily, weekly, monthly, total, perHour, peakHours] = await Promise.all([
+      // 📅 Daily displays (Today only)
+      pool.query(`
+        SELECT SUM(play_count)::int AS count
+        FROM asset_plays
+        WHERE campaign_id = $1 AND play_date = CURRENT_DATE
+      `, [campaignId]),
+
+      // 📆 Weekly displays (Last 7 days)
+      pool.query(`
+        SELECT SUM(play_count)::int AS count
+        FROM asset_plays
+        WHERE campaign_id = $1 AND play_date >= CURRENT_DATE - INTERVAL '7 days'
+      `, [campaignId]),
+
+      // 🗓️ Monthly displays (Last 30 days)
+      pool.query(`
+        SELECT SUM(play_count)::int AS count
+        FROM asset_plays
+        WHERE campaign_id = $1 AND play_date >= CURRENT_DATE - INTERVAL '30 days'
+      `, [campaignId]),
+
+      // 📊 Total displays for campaign
+      pool.query(`
+        SELECT SUM(play_count)::int AS count
+        FROM asset_plays
+        WHERE campaign_id = $1
+      `, [campaignId]),
+
+      // 🕐 Average per hour (last 24h)
+      pool.query(`
+        SELECT COUNT(*) / 24.0 AS avg_per_hour
+        FROM asset_play_logs
+        WHERE campaign_id = $1 AND played_at >= NOW() - INTERVAL '1 day'
+      `, [campaignId]),
+
+      // ⏱️ Peak hours
+      pool.query(`
+        SELECT EXTRACT(HOUR FROM played_at) AS hour, COUNT(*)::int AS displays
+        FROM asset_play_logs
+        WHERE campaign_id = $1 AND played_at >= NOW() - INTERVAL '7 days'
+        GROUP BY hour ORDER BY hour
+      `, [campaignId]),
+    ]);
+
+    res.json({
+      lastUpdated: new Date().toISOString(),
+      dailyDisplays: daily.rows[0].count || 0,
+      weeklyDisplays: weekly.rows[0].count || 0,
+      monthlyDisplays: monthly.rows[0].count || 0,
+      totalDisplays: total.rows[0].count || 0,
+      averageDisplaysPerHour: Math.round(perHour.rows[0].avg_per_hour || 0),
+      peakHours: peakHours.rows.map(row => ({
+        hour: parseInt(row.hour),
+        displays: row.displays,
+      })),
+    });
+  } catch (err) {
+    console.error("❌ Error in campaign metrics:", err);
+    res.status(500).send("Server Error");
+  }
+});
+
+
+
+
+app.patch('/billboards/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!['online', 'offline'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status. Use "online" or "offline".' });
+  }
+
+  try {
+    const result = await db.query(
+      'UPDATE billboards SET status = $1 WHERE id = $2 RETURNING *',
+      [status, id]
+    );
+
+    res.json({ message: 'Status updated', billboard: result.rows[0] });
+  } catch (err) {
+    console.error('PATCH status error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
+// Connect a screen_id to a billboard
+app.patch('/billboards/:id/connect', async (req, res) => {
+  const { id } = req.params;
+  const { screen_id } = req.body;
+
+  if (!screen_id || typeof screen_id !== 'string') {
+    return res.status(400).json({ error: 'screen_id is required and must be a string' });
+  }
+
+  try {
+    const result = await pool.query(
+      'UPDATE billboards SET screen_id = $1 WHERE id = $2 RETURNING *',
+      [screen_id.trim(), id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Billboard not found' });
+    }
+
+    res.json({ message: 'Billboard connected successfully', billboard: result.rows[0] });
+  } catch (err) {
+    console.error('Error connecting screen_id:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+// Disconnect screen_id from billboard (set to null)
+app.patch('/billboards/:id/disconnect', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      'UPDATE billboards SET screen_id = NULL WHERE id = $1 RETURNING *',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Billboard not found' });
+    }
+
+    res.json({ message: 'Screen disconnected successfully', billboard: result.rows[0] });
+  } catch (err) {
+    console.error('Error disconnecting screen_id:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+app.get('/api/slotz', async (req, res) => {
+  const { billboard_id } = req.query;
+
+  if (!billboard_id) {
+    return res.status(400).send('billboard_id is required');
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, start_date, end_date, slot_number
+       FROM generated_slots
+       WHERE billboard_id = $1
+       ORDER BY start_date ASC, slot_number ASC`,
+      [billboard_id]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+
+
+
+
+app.post("/api/users", async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password)
+    return res.status(400).json({ error: "Email and password are required" });
+
+  try {
+    const result = await pool.query(
+      "INSERT INTO admin_user (email, password) VALUES ($1, $2) RETURNING *",
+      [email, password]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error("Error adding user:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post('/business-profile', authenticateToken, async (req, res) => {
+  console.log('Request body:', req.body); 
+  console.log('User from token:', req.user);
+  console.log('Email from token:', req.body.email);
+
+  const { companyName, registrationNumber, address, gstDocument, panDocument } = req.body;
+
+  try {
+    // Upload GST Document
+    let gstDocumentUrl = gstDocument;
+  
+
+    // Upload PAN Document
+    let panDocumentUrl = panDocument;
+   
+
+    // Update user profile in the database
+    await pool.query(
+      `UPDATE users 
+SET company_name = $1, 
+    registration_number = $2, 
+    address = $3, 
+    gst_document_url = $4, 
+    pan_document_url = $5 
+WHERE email = $6`,
+      [companyName, registrationNumber, address, gstDocumentUrl, panDocumentUrl, req.body.email]
+    );
+
+    res.json({ message: 'Business profile updated successfully' });
+  } catch (err) {
+    console.error('Update Business Profile Error:', err);
+    res.status(500).json({ error: 'Failed to update business profile' });
+  }
+});
+
+
+
+
+app.get('/states', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT DISTINCT state FROM billboards');
+    res.json(result.rows.map(row => row.state));
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server Error');
+  }
+});
+
+
+
+app.get('/admin-dashboard-stats', async (req, res) => {
+  try {
+    const owner = 'admin'; // You can make this dynamic if needed
+
+    // Total bookings and revenue for campaigns where at least one billboard has matching owner
+    const { rows } = await pool.query(`
+      SELECT 
+        COUNT(*) AS total_bookings,
+        COALESCE(SUM(total_amount::numeric), 0) AS total_revenue
+      FROM campaigns
+      WHERE EXISTS (
+        SELECT 1 FROM jsonb_array_elements(billboards) AS elem
+        WHERE elem->>'owner' = $1
+      )
+    `, [owner]);
+
+    // Total billboards owned by this admin
+const totalBillboardsRes = await pool.query(`
+  SELECT COUNT(*) AS total
+  FROM billboards
+  WHERE user_id = $1
+`, ['admin']);
+
+
+const billboardStatusRes = await pool.query(`
+  SELECT status, COUNT(*) AS count
+  FROM billboards
+  WHERE user_id = $1
+  GROUP BY status
+`, [owner]);
+
+const statusCounts = {
+  active: 0,
+  maintenance: 0,
+  offline: 0,
+};
+
+billboardStatusRes.rows.forEach(row => {
+  const key = row.status?.toLowerCase();
+  if (statusCounts.hasOwnProperty(key)) {
+    statusCounts[key] = parseInt(row.count);
+  }
+});
+
+
+    res.json({
+      totalBookings: parseInt(rows[0].total_bookings),
+      totalRevenue: parseFloat(rows[0].total_revenue),
+      totalBillboards:parseInt(totalBillboardsRes.rows[0]?.total || '0'),
+       billboardStatus: statusCounts 
+    });
+
+    
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error fetching admin dashboard stats');
+  }
+});
+
+
+// In billboardController.js
+app.get('/city',async (req, res) => {
+  const { state } = req.query;
+  try {
+    const result = await pool.query(
+      'SELECT DISTINCT city FROM billboards WHERE state = $1',
+      [state]
+    );
+    const cities = result.rows.map(row => row.city);
+    res.json(cities);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// And in routes/billboards.js
+
+// routes/billboards.js
+app.get('/availability', async (req, res) => {
+  const { state, city } = req.query;
+  try {
+    let result;
+    if (city) {
+      result = await pool.query('SELECT 1 FROM billboards WHERE city = $1 LIMIT 1', [city]);
+    } else if (state) {
+      result = await pool.query('SELECT 1 FROM billboards WHERE state = $1 LIMIT 1', [state]);
+    }
+    res.json({ available: result.rows.length > 0 });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
+
+
+app.get('/business-profiler', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.user;
+   // 👀
+    
+
+    const result = await pool.query(
+      `SELECT company_name, registration_number, address, gst_document_url, pan_document_url 
+       FROM users 
+       WHERE id = $1`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Business profile not found' });
+    }
+
+    const profile = result.rows[0];
+    res.json({
+      companyName: profile.company_name,
+      registrationNumber: profile.registration_number,
+      address: profile.address,
+      gstDocument: profile.gst_document_url,
+      panDocument: profile.pan_document_url,
+    });
+  } catch (error) {
+    console.error('Fetch Business Profile Error:', error);
+    res.status(500).json({ error: 'Failed to fetch business profile' });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+module.exports = app;
+
+
+
+
+

@@ -1,0 +1,17 @@
+// SuperAdmin Emails Table Schema
+// Add this to your main schema.prisma file
+
+model SuperAdminEmail {
+  id               Int      @id @default(autoincrement())
+  email            String   @unique @db.VarChar(255)
+  name             String?  @db.VarChar(255)
+  isActive         Boolean  @default(true) @map("is_active")
+  notificationTypes String[] @map("notification_types")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("superadmin_emails")
+  @@index([isActive])
+  @@index([email])
+}
+

@@ -1,0 +1,23 @@
+// Email Notifications Table Schema
+// Add this to your main schema.prisma file
+
+model EmailNotification {
+  id                Int      @id @default(autoincrement())
+  notificationType  String   @map("notification_type") @db.VarChar(100)
+  recipientEmail   String   @map("recipient_email") @db.VarChar(255)
+  subject          String   @db.VarChar(500)
+  status           String   @default("pending") @db.VarChar(50)
+  messageId        String?  @map("message_id") @db.VarChar(255)
+  errorMessage     String?  @map("error_message") @db.Text
+  data             Json?    @db.JsonB
+  sentAt           DateTime? @map("sent_at") @db.Timestamptz(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("email_notifications")
+  @@index([notificationType])
+  @@index([status])
+  @@index([recipientEmail])
+  @@index([createdAt])
+}
+

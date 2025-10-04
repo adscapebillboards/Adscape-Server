@@ -1,0 +1,395 @@
+const express = require('express');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const prisma = require('../db/db'); // Prisma client
+const router = express.Router();
+const streamifier = require('streamifier');
+const cloudinary = require('./../config/cloudinary'); // path to your cloudinary.js // your multer setup
+const multer = require('multer');
+const { OAuth2Client } = require('google-auth-library');
+const JWT_SECRET = process.env.JWT_SECRET;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const upload = multer({ storage: multer.memoryStorage() });
+
+// Initialize Google OAuth client
+const client = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+// Verify Google OAuth token
+async function verifyGoogleToken(token) {
+  try {
+    const ticket = await client.verifyIdToken({
+      idToken: token,
+      audience: GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    return {
+      googleId: payload.sub,
+      email: payload.email,
+      name: payload.name,
+      picture: payload.picture,
+      emailVerified: payload.email_verified
+    };
+  } catch (error) {
+    console.error('Google token verification failed:', error);
+    throw new Error('Invalid Google token');
+  }
+}
+
+// Google OAuth Sign Up
+router.post('/google/signup', async (req, res) => {
+  const { googleToken } = req.body;
+
+  console.log('Google Signup Request:', { googleToken: googleToken ? 'Present' : 'Missing' });
+
+  if (!googleToken) {
+    return res.status(400).json({ error: 'Google token is required' });
+  }
+
+  if (!GOOGLE_CLIENT_ID) {
+    console.error('GOOGLE_CLIENT_ID not configured');
+    return res.status(500).json({ error: 'Google OAuth not configured' });
+  }
+
+  try {
+    // Verify Google token
+    const googleUser = await verifyGoogleToken(googleToken);
+    console.log('Google User Verified:', { email: googleUser.email, name: googleUser.name });
+    
+    // Check if user already exists
+    const existingUser = await prisma.user.findUnique({
+      where: { email: googleUser.email }
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists. Please sign in instead.' });
+    }
+
+    // Create new user
+    const user = await prisma.user.create({
+      data: {
+        email: googleUser.email,
+        fullName: googleUser.name,
+        googleId: googleUser.googleId,
+        joindate: new Date(),
+        status: 'active',
+        totalbookings: 0,
+        totalspent: '0',
+        emailVerified: googleUser.emailVerified
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phoneNumber: true,
+        joindate: true,
+        status: true,
+        totalbookings: true,
+        totalspent: true
+      }
+    });
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+    
+    console.log('User created successfully:', { id: user.id, email: user.email });
+    res.json({ token, user });
+  } catch (error) {
+    console.error('Google Signup Error:', error);
+    res.status(500).json({ error: 'Google signup failed: ' + error.message });
+  }
+});
+
+// Google OAuth Sign In
+router.post('/google/login', async (req, res) => {
+  const { googleToken } = req.body;
+
+  console.log('Google Login Request:', { googleToken: googleToken ? 'Present' : 'Missing' });
+
+  if (!googleToken) {
+    return res.status(400).json({ error: 'Google token is required' });
+  }
+
+  if (!GOOGLE_CLIENT_ID) {
+    console.error('GOOGLE_CLIENT_ID not configured');
+    return res.status(500).json({ error: 'Google OAuth not configured' });
+  }
+
+  try {
+    // Verify Google token
+    const googleUser = await verifyGoogleToken(googleToken);
+    console.log('Google User Verified:', { email: googleUser.email, name: googleUser.name });
+    
+    // Find existing user
+    const user = await prisma.user.findUnique({
+      where: { email: googleUser.email }
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: 'User not found. Please sign up first.' });
+    }
+
+    // Update user's Google ID if not set
+    if (!user.googleId) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { googleId: googleUser.googleId }
+      });
+    }
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+    
+    console.log('User logged in successfully:', { id: user.id, email: user.email });
+    res.json({ 
+      token, 
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        fullName: user.fullName, 
+        phoneNumber: user.phoneNumber 
+      } 
+    });
+  } catch (error) {
+    console.error('Google Login Error:', error);
+    res.status(500).json({ error: 'Google login failed: ' + error.message });
+  }
+});
+
+// OAuth Complete Profile
+router.post('/oauth/complete-profile', async (req, res) => {
+  const { email, fullName, phoneNumber, password, googleId, picture } = req.body;
+
+  console.log('OAuth Complete Profile Request:', { 
+    email, 
+    fullName, 
+    phoneNumber: phoneNumber ? 'Present' : 'Missing',
+    password: password ? 'Present' : 'Missing',
+    googleId: googleId ? 'Present' : 'Missing'
+  });
+
+  if (!email || !fullName || !phoneNumber || !password || !googleId) {
+    return res.status(400).json({ error: 'All fields are required' });
+  }
+
+  try {
+    // Check if user already exists
+    const existingUser = await prisma.user.findUnique({
+      where: { email }
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists. Please sign in instead.' });
+    }
+
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user with OAuth data
+    const user = await prisma.user.create({
+      data: {
+        email,
+        fullName,
+        phoneNumber,
+        password: hashedPassword,
+        googleId,
+        joindate: new Date(),
+        status: 'active',
+        totalbookings: 0,
+        totalspent: '0',
+        emailVerified: true // OAuth users have verified emails
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phoneNumber: true,
+        joindate: true,
+        status: true,
+        totalbookings: true,
+        totalspent: true
+      }
+    });
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+    
+    console.log('OAuth user created successfully:', { id: user.id, email: user.email });
+    res.json({ token, user });
+  } catch (error) {
+    console.error('OAuth Complete Profile Error:', error);
+    res.status(500).json({ error: 'Failed to complete profile: ' + error.message });
+  }
+});
+
+// Sign up
+router.post('/signup', async (req, res) => {
+  const { email, password, fullName, phoneNumber } = req.body; // ✅ add phoneNumber here
+
+  console.log('Received data:', { email, password, fullName, phoneNumber }); // Log the received data
+  
+
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = await prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+        fullName,
+        phoneNumber,
+        joindate: new Date(),
+        status: 'active',
+        totalbookings: 0,
+        totalspent: '0'
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phoneNumber: true,
+        joindate: true,
+        status: true,
+        totalbookings: true,
+        totalspent: true
+      }
+    });
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+    
+    console.log('JWT_SECRET:', JWT_SECRET);
+
+    res.json({ token, user });
+  } catch (err) {
+    console.error('Signup Error:', err);
+    res.status(500).json({ error: 'Signup failed' });
+  }
+});
+
+// Sign in
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { email }
+    });
+    console.log('JWT_SECRET:', JWT_SECRET); // Check if the secret is being loaded correctly
+
+    if (!user) return res.status(400).json({ error: 'Invalid credentials' });
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+
+    res.json({ token, user: { id: user.id, email: user.email, fullName: user.fullName, phoneNumber: user.phoneNumber } });
+  } catch (err) {
+    console.error('Login Error:', err);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// Publisher login
+router.post('/publishers/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const publisher = await prisma.publisher.findUnique({
+      where: { email }
+    });
+
+    if (!publisher) return res.status(400).json({ error: 'Invalid credentials' });
+
+    const isMatch = await bcrypt.compare(password, publisher.password);
+    if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
+
+    // Check if publisher status is active
+    if (publisher.status !== 'active') {
+      return res.status(403).json({ 
+        error: 'Account not approved', 
+        status: publisher.status || 'pending',
+        message: 'Your account is pending approval. Please wait for admin approval before logging in.'
+      });
+    }
+
+    const token = jwt.sign({ id: publisher.id, email: publisher.email, role: 'publisher' }, JWT_SECRET, { expiresIn: '30d' });
+
+    res.json({ 
+      token, 
+      user: { 
+        id: publisher.id, 
+        email: publisher.email, 
+        name: publisher.name,
+        phone: publisher.phone,
+        location: publisher.location,
+        role: 'publisher'
+      } 
+    });
+  } catch (err) {
+    console.error('Publisher Login Error:', err);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+
+// Add to auth.js route file
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token provided' });
+  
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (err) return res.status(403).json({ error: 'Invalid token' });
+      req.user = user;
+      next();
+    });
+  };
+  
+  router.get('/me', authenticateToken, async (req, res) => {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          phoneNumber: true,
+          joindate: true,
+          status: true,
+          totalbookings: true,
+          totalspent: true,
+          lastbooking: true
+        }
+      });
+      res.json({ user });
+    } catch (err) {
+      console.error('Fetch user error:', err);
+      res.status(500).json({ error: 'Failed to fetch user' });
+    }
+  });
+  
+
+  // Get all users
+router.get('/users', authenticateToken, async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phoneNumber: true,
+        joindate: true,
+        status: true,
+        totalbookings: true,
+        totalspent: true,
+        lastbooking: true
+      }
+    });
+    res.json({ users });
+  } catch (err) {
+    console.error('Get Users Error:', err);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+
+
+module.exports = router;

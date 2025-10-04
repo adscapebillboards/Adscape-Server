@@ -1,0 +1,345 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://adscape_user:GfYobxNJofTLXCxPlKCbQw3bWGqLLvlS@dpg-d37pikffte5s73bfpg3g-a.oregon-postgres.render.com/adscape"
+}
+
+model User {
+  id                 Int       @id @default(autoincrement())
+  email              String    @unique @db.VarChar(255)
+  password           String?   @db.VarChar(255)
+  fullName           String?   @map("full_name")
+  phoneNumber        String?   @map("phone_number") @db.VarChar(20)
+  companyName        String?   @map("company_name")
+  registrationNumber String?   @map("registration_number")
+  address            String?
+  gstDocumentUrl     String?   @map("gst_document_url")
+  panDocumentUrl     String?   @map("pan_document_url")
+  totalbookings      Int?
+  lastbooking        DateTime? @db.Date
+  totalspent         String?   @db.VarChar(20)
+  status             String?   @db.VarChar(20)
+  joindate           DateTime? @db.Date
+  googleId           String?   @map("google_id") @db.VarChar(255)
+  emailVerified      Boolean?  @map("email_verified") @default(false)
+
+  @@map("users")
+}
+
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
+model AdminUser {
+  id       Int     @default(autoincrement())
+  email    String? @db.VarChar
+  password String? @db.VarChar
+
+  @@map("admin_user")
+  @@ignore
+}
+
+model Publisher {
+  id              Int              @id @default(autoincrement())
+  name            String
+  email           String           @unique
+  phone           String
+  location        String?
+  totalBillboards Int?             @map("total_billboards")
+  revenue         String?
+  status          String?
+  joinDate        DateTime?        @map("join_date") @db.Date
+  password        String           @default("") @db.VarChar(255)
+  role            String?
+  address         String?
+  businessInfo    Json?            @map("business_info")
+  businessType    String?          @map("business_type")
+  city            String?
+  companyName     String?          @map("company_name")
+  pincode         String?
+  state           String?
+  website         String?
+  googleId        String?          @map("google_id") @db.VarChar(255)
+  metric          PublisherMetric?
+
+  @@map("publishers")
+}
+
+model Billboard {
+  id                   String    @id @default(dbgenerated("nextval('billboards_id_seq'::regclass)"))
+  location             String?
+  city                 String?
+  state                String?
+  type                 String?
+  orientation          String?
+  dailyViewership      Int?      @map("daily_viewership")
+  pricePerDay          Int?      @map("price_per_day")
+  available            Boolean?  @default(true)
+  size_width           Int?
+  size_height          Int?
+  size_unit            String?
+  size_category        String?
+  images               String[]
+  width                Int?
+  height               Int?
+  unit                 String?
+  category             String?
+  latitude             Float?
+  longitude            Float?
+  userId               String?   @map("user_id")
+  adDuration           String?   @map("ad_duration")
+  openingTime          String?   @map("opening_time")
+  closingTime          String?   @map("closing_time")
+  maxAdvertisers       Int?      @map("max_advertiser_per_day")
+  description          String?
+  resolution           String?   @db.VarChar(50)
+  name                 String?   @default("NULL")
+  autoBrightness       Boolean   @default(false) @map("auto_brightness")
+  reason               String[]
+  status               String?   @default("pending")
+  screen_id            String?
+  createdAt            DateTime? @default(now()) @map("created_at")
+  rejectionReason      String?   @map("rejection_reason")
+  updatedAt            DateTime? @updatedAt @map("updated_at")
+  maxAdvertiseDuration Int?      @map("max_advertise_duration")
+  max_slots_per_day    Int?      @default(8)
+  slot_duration        Int?      @default(60)
+  slot_start_time      String?   @default("09:00")
+  slot_end_time        String?   @default("18:00")
+
+  @@map("billboards")
+}
+
+model Campaign {
+  id           String    @id @default(dbgenerated("nextval('campaigns_id_seq'::regclass)"))
+  userName     String    @map("user_name")
+  campaignName String?   @map("campaign_name")
+  status       String?
+  totalAmount  Decimal?  @map("total_amount") @db.Decimal
+  startDate    DateTime? @map("start_date") @db.Date
+  endDate      DateTime? @map("end_date") @db.Date
+  billboards   Json?
+  createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime? @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owner        String?
+
+  @@map("campaigns")
+}
+
+model GeneratedSlot {
+  id          String    @id @default(cuid())
+  campaignId  String    @map("campaign_id")
+  billboardId String    @map("billboard_id")
+  assetUrl    String    @map("asset_url")
+  startDate   DateTime  @map("start_date") @db.Timestamp(6)
+  endDate     DateTime  @map("end_date") @db.Timestamp(6)
+  duration    Int
+  updated_at  DateTime? @default(now()) @db.Timestamp(6)
+  slotNumber  Int?      @map("slot_number")
+  screenId    String?   @map("screen_id")
+
+  @@map("generated_slots")
+}
+
+model AssetPlayLog {
+  id         Int      @id @default(autoincrement())
+  screenId   String   @map("screen_id")
+  assetUrl   String   @map("asset_url")
+  playedAt   DateTime @default(now()) @map("played_at") @db.Timestamp(6)
+  campaignId String?  @map("campaign_id")
+
+  @@index([campaignId], map: "idx_asset_play_logs_campaign")
+  @@map("asset_play_logs")
+}
+
+model AssetPlay {
+  id         Int      @id @default(autoincrement())
+  screenId   String   @map("screen_id")
+  assetUrl   String   @map("asset_url")
+  playDate   DateTime @map("play_date") @db.Date
+  playCount  Int?     @default(0) @map("play_count")
+  campaignId String?  @map("campaign_id")
+
+  @@unique([screenId, assetUrl, playDate])
+  @@unique([screenId, assetUrl, playDate], map: "asset_plays_unique_slot_per_day")
+  @@unique([screenId, assetUrl, campaignId, playDate], map: "unique_asset_play")
+  @@index([campaignId], map: "idx_asset_plays_campaign")
+  @@map("asset_plays")
+}
+
+model playlists {
+  id     Int      @id @default(autoincrement())
+  name   String   @db.VarChar
+  assets String[]
+}
+
+model signage_assets {
+  id         Int      @id @default(autoincrement())
+  image_url  String
+  duration   Int
+  start_time DateTime @db.Timestamp(6)
+  end_time   DateTime @db.Timestamp(6)
+  screen_id  String
+}
+
+model slots {
+  id           String    @id @db.Uuid
+  billboard_id String
+  asset_url    String
+  start_date   DateTime  @db.Timestamp(6)
+  end_date     DateTime  @db.Timestamp(6)
+  duration     Int?
+  updated_at   DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model Registration {
+  id              Int      @id @default(autoincrement())
+  personalInfo    Json     @map("personal_info")
+  businessInfo    Json     @map("business_info")
+  documents       Json
+  status          String   @default("pending")
+  rejectionReason String?  @map("rejection_reason")
+  submittedAt     DateTime @default(now()) @map("submitted_at") @db.Timestamp(6)
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+  password        String?  @db.VarChar(255)
+  googleId        String?  @map("google_id") @db.VarChar(255)
+  googlePicture   String?  @map("google_picture")
+
+  @@map("registrations")
+}
+
+model PublisherMetric {
+  id              Int       @id @default(autoincrement())
+  publisherId     Int       @unique
+  totalBillboards Int       @default(0)
+  totalBookings   Int       @default(0)
+  totalRevenue    Float     @default(0)
+  joinDate        DateTime
+  lastBooking     DateTime?
+  status          String?   @db.VarChar(20)
+  settings        Json?
+  publisher       Publisher @relation(fields: [publisherId], references: [id])
+
+  @@map("publisher_metrics")
+}
+
+model SuperAdminEmail {
+  id                Int       @id @default(autoincrement())
+  email             String    @unique @db.VarChar(255)
+  name              String?   @db.VarChar(255)
+  isActive          Boolean?  @default(true) @map("is_active")
+  notificationTypes String[]  @map("notification_types")
+  createdAt         DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime? @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([isActive], map: "idx_superadmin_emails_active")
+  @@index([email], map: "idx_superadmin_emails_email")
+  @@map("superadmin_emails")
+}
+
+model EmailNotification {
+  id               Int       @id @default(autoincrement())
+  notificationType String    @map("notification_type") @db.VarChar(100)
+  recipientEmail   String    @map("recipient_email") @db.VarChar(255)
+  subject          String    @db.VarChar(500)
+  status           String    @default("pending") @db.VarChar(50)
+  messageId        String?   @map("message_id") @db.VarChar(255)
+  errorMessage     String?   @map("error_message")
+  data             Json?
+  sentAt           DateTime? @map("sent_at") @db.Timestamptz(6)
+  createdAt        DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime? @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([createdAt], map: "idx_email_notifications_created_at")
+  @@index([recipientEmail], map: "idx_email_notifications_recipient")
+  @@index([status], map: "idx_email_notifications_status")
+  @@index([notificationType], map: "idx_email_notifications_type")
+  @@map("email_notifications")
+}
+
+model PlayerScreen {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  machineId  String    @unique
+  screenId   String    @unique
+  resolution String?
+  os         String?
+  appVersion String?
+  ipAddress  String?
+  createdAt  DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime  @default(now()) @updatedAt @db.Timestamp(6)
+  lastActive DateTime? @default(now()) @db.Timestamptz(6)
+  statinfo   String?   @default("active")
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model BillboardAvailability {
+  id           Int      @id @default(autoincrement())
+  billboardId  String   @map("billboard_id")
+  date         DateTime @db.Date
+  availability Json
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([billboardId, date], map: "billboard_availability_uniq")
+  @@map("billboard_availability")
+}
+
+model DefaultAsset {
+  id        Int       @id @default(autoincrement())
+  assetUrl  String
+  assetName String?
+  assetType String?   @default("image")
+  duration  Int?      @default(10)
+  isActive  Boolean?  @default(true)
+  createdAt DateTime? @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model billboard_bookings {
+  id           String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  billboard_id String
+  campaign_id  String
+  start_date   DateTime  @db.Date
+  end_date     DateTime  @db.Date
+  total_slots  Int
+  status       String?   @default("ACTIVE")
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at   DateTime? @default(now()) @db.Timestamp(6)
+
+  @@unique([billboard_id, campaign_id, start_date, end_date])
+  @@index([billboard_id], map: "idx_billboard_bookings_billboard")
+  @@index([campaign_id], map: "idx_billboard_bookings_campaign")
+  @@index([start_date, end_date], map: "idx_billboard_bookings_dates")
+  @@index([status], map: "idx_billboard_bookings_status")
+}
+
+model notifications {
+  id              Int       @id @default(autoincrement())
+  recipient_email String?   @db.VarChar(255)
+  recipient_role  String?   @db.VarChar(50)
+  type            String    @db.VarChar(100)
+  title           String    @db.VarChar(300)
+  message         String?
+  entity_type     String?   @db.VarChar(50)
+  entity_id       String?   @db.VarChar(100)
+  is_read         Boolean?  @default(false)
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@index([created_at], map: "idx_notifications_created_at")
+  @@index([is_read], map: "idx_notifications_is_read")
+  @@index([recipient_email, recipient_role], map: "idx_notifications_recipient")
+}
+
+model slot_availability {
+  id              String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  billboard_id    String
+  date            DateTime  @db.Date
+  total_slots     Int?      @default(8)
+  booked_slots    Int?      @default(0)
+  available_slots Int?      @default(8)
+  last_updated    DateTime? @default(now()) @db.Timestamp(6)
+
+  @@unique([billboard_id, date])
+  @@index([billboard_id], map: "idx_slot_availability_billboard")
+  @@index([date], map: "idx_slot_availability_date")
+}
