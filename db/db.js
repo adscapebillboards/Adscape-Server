@@ -1,10 +1,12 @@
 const { PrismaClient } = require('@prisma/client');
 require('dotenv').config();
 
-const DATABASE_URL =
-  // "postgresql://adscape_user:GfYobxNJofTLXCxPlKCbQw3bWGqLLvlS@dpg-d37pikffte5s73bfpg3g-a.oregon-postgres.render.com/adscape";
-// const DATABASE_URL =
-  "postgresql://avnadmin:AVNS_07USf4r803Jrdm6vAva@billboard-srinnivassh-7657.l.aivencloud.com:16921/defaultdb?sslmode=require";
+// Construct DATABASE_URL from individual PostgreSQL environment variables
+const DATABASE_URL = process.env.DATABASE_URL || 
+  `postgresql://${process.env.PGUSER}:${process.env.PGPASSWORD}@${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}?sslmode=require`;
+
+// Set the constructed DATABASE_URL as an environment variable for Prisma
+process.env.DATABASE_URL = DATABASE_URL;
 
 // Typed global to store Prisma instance
 const globalForPrisma = global;

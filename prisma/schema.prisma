@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = "postgresql://adscape_user:GfYobxNJofTLXCxPlKCbQw3bWGqLLvlS@dpg-d37pikffte5s73bfpg3g-a.oregon-postgres.render.com/adscape"
+  url      = env("DATABASE_URL")
 }
 
 model User {
