@@ -155,18 +155,18 @@ router.post('/google/login', async (req, res) => {
 
 // OAuth Complete Profile
 router.post('/oauth/complete-profile', async (req, res) => {
-  const { email, fullName, phoneNumber, password, googleId, picture } = req.body;
+  const { email, fullName, phoneNumber, googleId, picture, joinDate, status } = req.body;
 
   console.log('OAuth Complete Profile Request:', { 
     email, 
     fullName, 
     phoneNumber: phoneNumber ? 'Present' : 'Missing',
-    password: password ? 'Present' : 'Missing',
+    password: 'Not required',
     googleId: googleId ? 'Present' : 'Missing'
   });
 
-  if (!email || !fullName || !phoneNumber || !password || !googleId) {
-    return res.status(400).json({ error: 'All fields are required' });
+  if (!email || !fullName || !phoneNumber || !googleId) {
+    return res.status(400).json({ error: 'email, fullName, phoneNumber and googleId are required' });
   }
 
   try {
@@ -179,19 +179,16 @@ router.post('/oauth/complete-profile', async (req, res) => {
       return res.status(400).json({ error: 'User already exists. Please sign in instead.' });
     }
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create new user with OAuth data
+    // Create new user with OAuth data (no password for Google accounts)
     const user = await prisma.user.create({
       data: {
         email,
         fullName,
         phoneNumber,
-        password: hashedPassword,
+        // password omitted for OAuth
         googleId,
-        joindate: new Date(),
-        status: 'active',
+        joindate: joinDate ? new Date(joinDate) : new Date(),
+        status: status || 'active',
         totalbookings: 0,
         totalspent: '0',
         emailVerified: true // OAuth users have verified emails
