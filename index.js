@@ -1,16 +1,22 @@
 const http = require('http');
-const app = require('./app-new');
-const port = 4000;
+const app = require('./app-new'); // import your real app
+const port = process.env.PORT || 4000;
 const cors = require('cors');
 const assetCleanupScheduler = require('./utils/assetCleanupScheduler');
-
-const server = http.createServer(app);
-
+const express = require('express');
 // Socket.IO setup
 const { Server } = require("socket.io");
+const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"],
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:5173",
+      "https://your-frontend-domain.com"
+    ],
     methods: ["GET", "POST"],
     allowedHeaders: ["ngrok-skip-browser-warning"],
     credentials: true
@@ -18,23 +24,24 @@ const io = new Server(server, {
   allowEIO3: true
 });
 
-const allowedOrigins = [
-  "http://localhost:3000",
-  "http://localhost:5173",
-  "http://127.0.0.1:3000",
-  "http://127.0.0.1:5173",
-  "https://your-frontend-domain.com" // later, for production
-];
-
+// Add CORS to your app (HTTP API)
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true); // allow non-browser clients
+    const allowedOrigins = [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:5173",
+      "https://your-frontend-domain.com"
+    ];
     if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error("CORS not allowed for this origin"));
   },
   credentials: true
 }));
 
+// JSON parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
