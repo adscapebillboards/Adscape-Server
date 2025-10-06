@@ -6,8 +6,8 @@
   "start": "node index.js",
   "test": "echo \"No tests yet\"",
   "build": "npx prisma generate",
-  "postinstall": "npm install && npx prisma generate",
-    "prestart": "npm install && npx prisma generate"
+  "postinstall": "npx prisma generate",
+    "prestart": "npx prisma generate"
 },
 
 "prisma": {
