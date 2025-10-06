@@ -367,19 +367,38 @@ const authenticateToken = (req, res, next) => {
   // Get all users
 router.get('/users', authenticateToken, async (req, res) => {
   try {
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        email: true,
-        fullName: true,
-        phoneNumber: true,
-        joindate: true,
-        status: true,
-        totalbookings: true,
-        totalspent: true,
-        lastbooking: true
-      }
-    });
+    const user = await prisma.user.upsert({
+  where: { email },
+  update: {
+    fullName,
+    phoneNumber,
+    googleId,
+    joindate: joinDate ? new Date(joinDate) : undefined,
+    status: status || undefined
+  },
+  create: {
+    email,
+    fullName,
+    phoneNumber,
+    googleId,
+    joindate: joinDate ? new Date(joinDate) : new Date(),
+    status: status || 'active',
+    totalbookings: 0,
+    totalspent: '0',
+    emailVerified: true
+  },
+  select: {
+    id: true,
+    email: true,
+    fullName: true,
+    phoneNumber: true,
+    joindate: true,
+    status: true,
+    totalbookings: true,
+    totalspent: true
+  }
+});
+
     res.json({ users });
   } catch (err) {
     console.error('Get Users Error:', err);
