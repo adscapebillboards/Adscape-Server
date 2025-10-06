@@ -9,6 +9,11 @@
   "postinstall": "npx prisma generate"
 },
 
+"prisma": {
+  "schema": "prisma/schema.prisma"
+},
+
+
   "author": "",
   "license": "ISC",
   "description": "",
