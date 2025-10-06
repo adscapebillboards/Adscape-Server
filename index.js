@@ -17,6 +17,26 @@ const io = new Server(server, {
   allowEIO3: true
 });
 
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5173",
+  "https://your-frontend-domain.com" // later, for production
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true); // allow non-browser clients
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS not allowed for this origin"));
+  },
+  credentials: true
+}));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 // Socket.IO connection handling
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
