@@ -1,6 +1,7 @@
 const http = require('http');
 const app = require('./app-new');
 const port = 4000;
+const cors = require('cors');
 const assetCleanupScheduler = require('./utils/assetCleanupScheduler');
 
 const server = http.createServer(app);
