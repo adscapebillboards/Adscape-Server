@@ -48,8 +48,7 @@ const availabilityRoutes = require('./routes/availability');
 const app = express();
 
 // Middleware
-app.use(express.json());
-app.use(bodyParser.json());
+
 const allowedOrigins = new Set([
   'http://localhost:3000',
   'http://localhost:8080',
@@ -63,15 +62,33 @@ const allowedOrigins = new Set([
   'https://admin.adscape.co.in'
 ]);
 
+// Apply CORS middleware globally
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, file:// like Electron)
+    if (!origin) return callback(null, true); // allow non-browser clients
+    if (allowedOrigins.has(origin)) return callback(null, true);
+    callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true, // frontend can send cookies / auth headers
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
+// Handle preflight requests for all routes
+app.options("*", cors({
+  origin: (origin, callback) => {
     if (!origin) return callback(null, true);
     if (allowedOrigins.has(origin)) return callback(null, true);
-    return callback(null, false);
+    callback(new Error("Not allowed by CORS"));
   },
-  credentials: false
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
+// Body parsing middleware
+app.use(express.json());
+app.use(bodyParser.json());
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -83,7 +100,6 @@ app.use((req, res, next) => {
 app.get('/ping', (req, res) => {
   res.status(200).send('pong');
 });
-
 // Scheduler control endpoints
 app.post('/api/scheduler/start', (req, res) => {
   try {
