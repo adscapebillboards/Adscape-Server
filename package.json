@@ -6,7 +6,7 @@
   "start": "node index.js",
   "test": "echo \"No tests yet\"",
   "build": "npx prisma generate",
-  "postinstall": "npx prisma generate",
+  "postinstall": "chmod +x ./node_modules/.bin/prisma && npx prisma generate",
     "prestart": "npx prisma generate && npm install"
 },
 
