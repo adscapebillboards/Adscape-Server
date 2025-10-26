@@ -343,3 +343,62 @@ model slot_availability {
   @@index([billboard_id], map: "idx_slot_availability_billboard")
   @@index([date], map: "idx_slot_availability_date")
 }
+
+
+
+
+
+model Screen {
+  id        String   @id @db.VarChar(64)
+  createdAt DateTime @default(now())
+  bmiData   BMI[]
+}
+
+model AdscapePlayer {
+  id          String   @id @db.Uuid @default(uuid())
+  screenId    String   @unique @db.VarChar(64)
+  appVersion  String   @db.VarChar(10) // F1, F2, F3
+  flowType    String?  @db.VarChar(10) // F1, F2, or null for normal player
+  deviceName  String?  @db.VarChar(255)
+  screenWidth Int?
+  screenHeight Int?
+  ipAddress   String?  @db.VarChar(45)
+  location    String?  @db.VarChar(255)
+  osVersion   String?  @db.VarChar(50)
+  appVersionCode String? @db.VarChar(20)
+  lastSeen    DateTime @default(now())
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model UserBMI {
+  id        String   @id @db.Uuid @default(uuid())
+  name      String   @db.VarChar(255)
+  mobile    String   @db.VarChar(20)
+  createdAt DateTime @default(now())
+  bmiData   BMI[]
+}
+
+model BMI {
+  id        String   @id @db.Uuid
+  screenId  String
+  screen    Screen   @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  userId    String?  @db.Uuid
+  user      UserBMI?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  heightCm  Float
+  weightKg  Float
+  bmi       Float
+  category  String
+  timestamp DateTime @default(now())
+  deviceId  String?  @db.VarChar(255)
+  appVersion String? @db.VarChar(10)
+  location  String?  @db.VarChar(255)
+  fortune   String?  @db.Text
+
+  @@index([screenId])
+  @@index([userId])
+  @@index([userId, timestamp])
+}
+
+
