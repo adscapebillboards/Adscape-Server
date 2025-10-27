@@ -1,173 +1,13 @@
-const http = require('http');
-const app = require('./app-new'); // import your real app
-const port = process.env.PORT || 4000;
-const cors = require('cors');
-const assetCleanupScheduler = require('./utils/assetCleanupScheduler');
-const express = require('express');
-const prisma = require('./db/db');
+const prisma = require('../db/db');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
-// Socket.IO setup
-const { Server } = require("socket.io");
-const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: {
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://127.0.0.1:3000",
-      "http://127.0.0.1:5173",
-      "https://your-frontend-domain.com",
-      "https://adscape.co.in",
-      "https://admin.adscape.co.in",
-      "http://localhost:8080",
-      "http://127.0.0.1:5500",
-      "https://endearing-begonia-927b56.netlify.app",
-      "https://bmi-client.onrender.com"
-    ],
-    methods: ["GET", "POST"],
-    allowedHeaders: ["ngrok-skip-browser-warning"],
-    credentials: true
-  },
-  allowEIO3: true
-});
+// In-memory store for BMI data
+const bmiStore = new Map(); // bmiId -> payload
 
-// Add CORS to your app (HTTP API)
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // allow non-browser clients
-    const allowedOrigins = [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://127.0.0.1:3000", 
-      "http://127.0.0.1:5173",
-      "https://your-frontend-domain.com",
-       "https://adscape.co.in",
-       "https://admin.adscape.co.in",
-       "http://localhost:8080",
-         "http://127.0.0.1:5500",
-         "https://endearing-begonia-927b56.netlify.app",
-         "https://bmi-client.onrender.com"
-    ];
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("CORS not allowed for this origin"));
-  },
-  credentials: true
-}));
-
-// JSON parsing
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-  console.log('Player connected:', socket.id);
-  
-  // Send immediate welcome message
-  socket.emit('connected', { message: 'Connected to server', socketId: socket.id });
-  
-  // Handle test events
-  socket.on('test', (data) => {
-    console.log('Test event received:', data);
-    socket.emit('test-response', { message: 'Test response from server', received: data });
-  });
-  
-  // Handle player joining
-  socket.on('player-join', (data) => {
-    console.log('[SOCKET] Player joined:', data);
-    const machineId = data.machineId || data.screenId;
-    const screenId = data.screenId || data.machineId;
-    
-    // Join multiple rooms for compatibility
-    socket.join(`player-${machineId}`);
-    socket.join(`screen:${screenId}`);
-    
-    console.log('[SOCKET] Player joined rooms:', {
-      socketId: socket.id,
-      machineId,
-      screenId,
-      rooms: [`player-${machineId}`, `screen:${screenId}`]
-    });
-    
-    socket.emit('connected', { 
-      message: 'Connected to server',
-      socketId: socket.id,
-      rooms: [`player-${machineId}`, `screen:${screenId}`]
-    });
-  });
-  
-  // Handle asset playing status updates
-  socket.on('asset-playing', (data) => {
-    console.log('Asset playing:', data);
-    // Broadcast to all connected clients (for admin dashboard)
-    io.emit('asset-status-update', {
-      machineId: data.machineId,
-      screenId: data.screenId,
-      currentAsset: data.currentAsset,
-      isPlaying: data.isPlaying,
-      timestamp: new Date().toISOString()
-    });
-  });
-  
-  // Handle player status updates
-  socket.on('player-status', (data) => {
-    console.log('Player status update:', data);
-    io.emit('player-status-update', {
-      machineId: data.machineId,
-      screenId: data.screenId,
-      status: data.status,
-      lastActive: new Date().toISOString()
-    });
-  });
-
-  // Handle BMI data from test app
-  socket.on('bmi-data', async (data) => {
-    console.log('BMI data received:', data);
-    
-    try {
-      // Store BMI data in database
-      const bmiController = require('./controllers/bmiController');
-      const storeResult = await bmiController.storeBMIData(data);
-      
-      if (storeResult.success) {
-        console.log('BMI data stored successfully in database');
-      } else {
-        console.error('Failed to store BMI data:', storeResult.error);
-      }
-    } catch (error) {
-      console.error('Error storing BMI data:', error);
-    }
-    
-    // Broadcast BMI data to all connected players
-    io.emit('bmi-data-received', {
-      ...data,
-      receivedAt: new Date().toISOString()
-    });
-    
-    // Also send to specific player if device ID matches
-    const targetPlayerRoom = `player-${data.deviceId}`;
-    socket.to(targetPlayerRoom).emit('bmi-data-received', {
-      ...data,
-      receivedAt: new Date().toISOString()
-    });
-  });
-  
-  socket.on('disconnect', () => {
-    console.log('Player disconnected:', socket.id);
-  });
-});
-
-
-
-
-
-// Mount BMI flow routes with Socket.IO support
-app.mountBMIFlowRoutes(io);
-console.log('[SERVER] BMI Flow routes mounted with Socket.IO');
-
-// Old code placeholder for reference
-/*
+/**
+ * Generate fortune message using Grok API
+ */
 async function generateFortuneMessage(bmiData) {
   try {
     const grokApiKey = process.env.GROK_API_KEY;
@@ -204,6 +44,9 @@ async function generateFortuneMessage(bmiData) {
   }
 }
 
+/**
+ * Generate fallback fortune message
+ */
 function generateFallbackFortune(bmiData) {
   const fortunes = [
     "Your journey to wellness is a beautiful adventure. Every step forward is progress worth celebrating.",
@@ -219,194 +62,9 @@ function generateFallbackFortune(bmiData) {
   return fortunes[Math.floor(Math.random() * fortunes.length)];
 }
 
-// Players join rooms by screenId
-io.on('connection', (socket) => {
-    console.log('[SOCKET] connected', socket.id, 'from', socket.handshake.address);
-
-    socket.on('player-join', (data) => {
-		try {
-            const screenId = String(data?.screenId || '');
-            console.log('[SOCKET] player-join', { socketId: socket.id, screenId, data });
-			if (screenId) {
-				socket.join(`screen:${screenId}`);
-                console.log(`[SOCKET] joined room screen:${screenId}`);
-			}
-		} catch (e) {
-            console.error('[SOCKET] player-join error', e);
-		}
-	});
-
-    socket.on('disconnect', (reason) => {
-        console.log('[SOCKET] disconnected', socket.id, 'reason:', reason);
-	});
-});
-
-// Health
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
-
-// POST /api/adscape/register -> Register Adscape player
-app.post('/api/adscape/register', async (req, res) => {
-    try {
-        const { 
-            screenId, 
-            appVersion, 
-            flowType, 
-            deviceName, 
-            screenWidth, 
-            screenHeight, 
-            ipAddress, 
-            location, 
-            osVersion, 
-            appVersionCode 
-        } = req.body || {};
-        
-        if (!screenId || !appVersion) {
-            return res.status(400).json({ error: 'screenId and appVersion required' });
-        }
-        
-        // Upsert Adscape player registration
-        const player = await prisma.adscapePlayer.upsert({
-            where: { screenId: String(screenId) },
-            update: {
-                appVersion: String(appVersion),
-                // Only update flowType if provided, otherwise keep existing value
-                ...(flowType !== undefined && flowType !== null ? { flowType: String(flowType) } : {}),
-                deviceName: deviceName ? String(deviceName) : null,
-                screenWidth: screenWidth ? Number(screenWidth) : null,
-                screenHeight: screenHeight ? Number(screenHeight) : null,
-                ipAddress: ipAddress ? String(ipAddress) : null,
-                location: location ? String(location) : null,
-                osVersion: osVersion ? String(osVersion) : null,
-                appVersionCode: appVersionCode ? String(appVersionCode) : null,
-                lastSeen: new Date(),
-                isActive: true,
-                updatedAt: new Date()
-            },
-            create: {
-                screenId: String(screenId),
-                appVersion: String(appVersion),
-                flowType: flowType ? String(flowType) : null,
-                deviceName: deviceName ? String(deviceName) : null,
-                screenWidth: screenWidth ? Number(screenWidth) : null,
-                screenHeight: screenHeight ? Number(screenHeight) : null,
-                ipAddress: ipAddress ? String(ipAddress) : null,
-                location: location ? String(location) : null,
-                osVersion: osVersion ? String(osVersion) : null,
-                appVersionCode: appVersionCode ? String(appVersionCode) : null,
-                lastSeen: new Date(),
-                isActive: true
-            }
-        });
-        
-        console.log('[ADSCAPE] Player registered:', { screenId, appVersion, flowType });
-        
-        return res.json({ 
-            ok: true, 
-            player: {
-                id: player.id,
-                screenId: player.screenId,
-                appVersion: player.appVersion,
-                flowType: player.flowType,
-                isActive: player.isActive
-            }
-        });
-    } catch (e) {
-        console.error('[ADSCAPE] Registration error:', e);
-        return res.status(500).json({ error: 'internal_error' });
-    }
-});
-
-// GET /api/adscape/player/:screenId -> Get player flow type
-app.get('/api/adscape/player/:screenId', async (req, res) => {
-    try {
-        const { screenId } = req.params;
-        
-        const player = await prisma.adscapePlayer.findUnique({
-            where: { screenId: String(screenId) }
-        });
-        
-        if (!player) {
-            return res.status(404).json({ error: 'Player not found' });
-        }
-        
-        return res.json({
-            ok: true,
-            player: {
-                screenId: player.screenId,
-                appVersion: player.appVersion,
-                flowType: player.flowType,
-                isActive: player.isActive
-            }
-        });
-    } catch (e) {
-        console.error('[ADSCAPE] Get player error:', e);
-        return res.status(500).json({ error: 'internal_error' });
-    }
-});
-
-// GET /api/adscape/players -> Get all players
-app.get('/api/adscape/players', async (req, res) => {
-    try {
-        console.log('[ADSCAPE] Getting all players');
-        
-        const players = await prisma.adscapePlayer.findMany({
-            orderBy: { lastSeen: 'desc' }
-        });
-        
-        res.json({ 
-            success: true, 
-            players 
-        });
-    } catch (error) {
-        console.error('[ADSCAPE] Get players error:', error);
-        res.status(500).json({ error: 'Failed to get players' });
-    }
-});
-
-// PUT /api/adscape/player/:screenId/flow-type -> Update player flow type
-app.put('/api/adscape/player/:screenId/flow-type', async (req, res) => {
-    try {
-        const { screenId } = req.params;
-        const { flowType } = req.body;
-        
-        console.log('[ADSCAPE] Updating flow type for player:', screenId, 'to:', flowType);
-        
-        const player = await prisma.adscapePlayer.update({
-            where: { screenId },
-            data: { flowType }
-        });
-        
-        res.json({ 
-            success: true, 
-            player 
-        });
-    } catch (error) {
-        console.error('[ADSCAPE] Update flow type error:', error);
-        res.status(500).json({ error: 'Failed to update flow type' });
-    }
-});
-
-// DELETE /api/adscape/player/:screenId -> Delete player
-app.delete('/api/adscape/player/:screenId', async (req, res) => {
-    try {
-        const { screenId } = req.params;
-        console.log('[ADSCAPE] Deleting player:', screenId);
-        
-        await prisma.adscapePlayer.delete({
-            where: { screenId }
-        });
-        
-        res.json({ 
-            success: true, 
-            message: 'Player deleted successfully' 
-        });
-    } catch (error) {
-        console.error('[ADSCAPE] Delete player error:', error);
-        res.status(500).json({ error: 'Failed to delete player' });
-    }
-});
-
-// Compute BMI helper
+/**
+ * Compute BMI helper
+ */
 function computeBMI(heightCm, weightKg) {
 	const h = Number(heightCm);
 	const w = Number(weightKg);
@@ -421,7 +79,9 @@ function computeBMI(heightCm, weightKg) {
 	return { bmi, category };
 }
 
-// Calculate streak helper
+/**
+ * Calculate streak helper
+ */
 function calculateStreak(bmiRecords) {
     if (!bmiRecords || bmiRecords.length === 0) return { currentStreak: 0, longestStreak: 0, isActive: false };
     
@@ -494,8 +154,11 @@ function calculateStreak(bmiRecords) {
     return { currentStreak, longestStreak, isActive };
 }
 
-// POST /api/bmi -> { heightCm, weightKg, screenId, appVersion }
-app.post('/api/bmi', async (req, res) => {
+/**
+ * POST /api/bmi -> { heightCm, weightKg, screenId, appVersion }
+ * Create BMI record
+ */
+exports.createBMI = async (req, res, io) => {
     try {
 		const { heightCm, weightKg, screenId, appVersion } = req.body || {};
 		if (!heightCm || !weightKg || !screenId) {
@@ -572,7 +235,9 @@ app.post('/api/bmi', async (req, res) => {
             ...payload,
             webUrl
         };
-        io.to(`screen:${String(screenId)}`).emit('bmi-data-received', emitPayload);
+        if (io) {
+            io.to(`screen:${String(screenId)}`).emit('bmi-data-received', emitPayload);
+        }
         console.log('[BMI] created and emitted', emitPayload);
 
 		return res.status(201).json({ ok: true, bmiId, webUrl });
@@ -580,10 +245,12 @@ app.post('/api/bmi', async (req, res) => {
         console.error('[BMI] POST /api/bmi error', e);
 		return res.status(500).json({ error: 'internal_error' });
 	}
-});
+};
 
-// POST /api/user -> { name, mobile } -> create or find user
-app.post('/api/user', async (req, res) => {
+/**
+ * POST /api/user -> { name, mobile } -> create or find user
+ */
+exports.createUser = async (req, res) => {
     try {
         const { name, mobile } = req.body || {};
         if (!name || !mobile) {
@@ -591,12 +258,12 @@ app.post('/api/user', async (req, res) => {
         }
         
         // Try to find existing user by mobile, otherwise create new
-        let user = await prisma.user.findFirst({
+        let user = await prisma.userBMI.findFirst({
             where: { mobile: String(mobile) }
         });
         
         if (!user) {
-            user = await prisma.user.create({
+            user = await prisma.userBMI.create({
                 data: {
                     name: String(name),
                     mobile: String(mobile)
@@ -609,10 +276,12 @@ app.post('/api/user', async (req, res) => {
         console.error('[USER] POST /api/user error', e);
         return res.status(500).json({ error: 'internal_error' });
     }
-});
+};
 
-// POST /api/payment-success -> { userId, bmiId } -> link user to BMI and emit to Android
-app.post('/api/payment-success', async (req, res) => {
+/**
+ * POST /api/payment-success -> { userId, bmiId } -> link user to BMI and emit to Android
+ */
+exports.paymentSuccess = async (req, res, io) => {
     try {
         const { userId, bmiId, appVersion } = req.body || {};
         if (!userId || !bmiId) {
@@ -644,7 +313,7 @@ app.post('/api/payment-success', async (req, res) => {
         }
         
        // Emit payment success to Android screen (only for non-F2 versions)
-        if (appVersion !== 'f2') {
+        if (appVersion !== 'f2' && io) {
             io.to(`screen:${updatedBMI.screenId}`).emit('payment-success', {
                 bmiId: updatedBMI.id,
                 screenId: updatedBMI.screenId,
@@ -668,10 +337,12 @@ app.post('/api/payment-success', async (req, res) => {
         console.error('[PAYMENT] POST /api/payment-success error', e);
         return res.status(500).json({ error: 'internal_error' });
     }
-});
+};
 
-// POST /api/progress-start -> { bmiId } -> emit progress start to both web and Android
-app.post('/api/progress-start', async (req, res) => {
+/**
+ * POST /api/progress-start -> { bmiId } -> emit progress start to both web and Android
+ */
+exports.progressStart = async (req, res, io) => {
     try {
         const { bmiId } = req.body || {};
         if (!bmiId) {
@@ -689,18 +360,20 @@ app.post('/api/progress-start', async (req, res) => {
         }
         
         // Emit progress start to Android screen
-        io.to(`screen:${bmiData.screenId}`).emit('progress-start', {
-            bmiId: bmiData.id,
-            screenId: bmiData.screenId,
-            userId: bmiData.userId,
-            user: bmiData.user,
-            bmi: bmiData.bmi,
-            category: bmiData.category,
-            height: bmiData.heightCm,
-            weight: bmiData.weightKg,
-            timestamp: bmiData.timestamp.toISOString(),
-            progressComplete: true // Flag to indicate this is progress start data
-        });
+        if (io) {
+            io.to(`screen:${bmiData.screenId}`).emit('progress-start', {
+                bmiId: bmiData.id,
+                screenId: bmiData.screenId,
+                userId: bmiData.userId,
+                user: bmiData.user,
+                bmi: bmiData.bmi,
+                category: bmiData.category,
+                height: bmiData.heightCm,
+                weight: bmiData.weightKg,
+                timestamp: bmiData.timestamp.toISOString(),
+                progressComplete: true // Flag to indicate this is progress start data
+            });
+        }
         
         console.log('[PROGRESS] Start emitted to screen:', bmiData.screenId);
         
@@ -709,10 +382,12 @@ app.post('/api/progress-start', async (req, res) => {
         console.error('[PROGRESS] POST /api/progress-start error', e);
         return res.status(500).json({ error: 'internal_error' });
     }
-});
+};
 
-// POST /api/fortune-generate -> { bmiId } -> generate fortune and emit to both web and Android
-app.post('/api/fortune-generate', async (req, res) => {
+/**
+ * POST /api/fortune-generate -> { bmiId } -> generate fortune and emit to both web and Android
+ */
+exports.fortuneGenerate = async (req, res, io) => {
     try {
         console.log('[FORTUNE] Request body:', req.body);
         console.log('[FORTUNE] Request body type:', typeof req.body);
@@ -767,7 +442,7 @@ app.post('/api/fortune-generate', async (req, res) => {
         };
         
         // Emit fortune to Android screen (only for non-F2 versions)
-        if (appVersion !== 'f2') {
+        if (appVersion !== 'f2' && io) {
             io.to(`screen:${bmiData.screenId}`).emit('fortune-ready', fortuneData);
             console.log('[FORTUNE] Generated and emitted to screen:', bmiData.screenId);
         } else {
@@ -781,10 +456,12 @@ app.post('/api/fortune-generate', async (req, res) => {
         console.error('[FORTUNE] POST /api/fortune-generate error', e);
         return res.status(500).json({ error: 'internal_error' });
     }
-});
+};
 
-// GET /api/user/:userId/analytics -> return user analytics data
-app.get('/api/user/:userId/analytics', async (req, res) => {
+/**
+ * GET /api/user/:userId/analytics -> return user analytics data
+ */
+exports.getUserAnalytics = async (req, res) => {
     try {
         const { userId } = req.params;
         
@@ -863,10 +540,12 @@ app.get('/api/user/:userId/analytics', async (req, res) => {
         console.error('[ANALYTICS] GET /api/user/:userId/analytics error', e);
         return res.status(500).json({ error: 'internal_error' });
     }
-});
+};
 
-// POST /api/bmi/:id/link-user -> link BMI record to user
-app.post('/api/bmi/:id/link-user', async (req, res) => {
+/**
+ * POST /api/bmi/:id/link-user -> link BMI record to user
+ */
+exports.linkUserToBMI = async (req, res) => {
     try {
         const { id } = req.params;
         const { userId } = req.body;
@@ -912,10 +591,12 @@ app.post('/api/bmi/:id/link-user', async (req, res) => {
         console.error('[BMI-LINK] Error linking BMI to user:', e);
         return res.status(500).json({ error: 'internal_error' });
     }
-});
+};
 
-// GET /api/bmi/:id -> return stored payload
-app.get('/api/bmi/:id', async (req, res) => {
+/**
+ * GET /api/bmi/:id -> return stored payload
+ */
+exports.getBMI = async (req, res) => {
     const id = req.params.id;
     console.log(`[BMI] GET request for id: ${id}`);
     
@@ -972,55 +653,25 @@ app.get('/api/bmi/:id', async (req, res) => {
             stack: e.stack
         });
     }
-});
+};
 
-// Debug connections
-app.get('/api/debug/connections', (_req, res) => {
+/**
+ * GET /api/debug/connections -> Debug socket connections
+ */
+exports.debugConnections = (req, res, io) => {
     try {
         const rooms = [];
-        io.sockets.adapter.rooms.forEach((socketsSet, room) => {
-            rooms.push({ room, size: socketsSet.size });
-        });
+        if (io) {
+            io.sockets.adapter.rooms.forEach((socketsSet, room) => {
+                rooms.push({ room, size: socketsSet.size });
+            });
+        }
         const sockets = [];
-        io.sockets.sockets.forEach((sock) => sockets.push(sock.id));
+        if (io) {
+            io.sockets.sockets.forEach((sock) => sockets.push(sock.id));
+        }
         res.json({ rooms, sockets });
     } catch (e) {
         res.status(500).json({ error: 'debug_error' });
     }
-});
-
-*/
-
-// Global error handler to ensure JSON responses
-app.use((err, req, res, next) => {
-    console.error('[SERVER] Global error:', err);
-    res.status(500).json({ 
-        error: 'internal_server_error', 
-        message: err.message,
-        path: req.path
-    });
-});
-
-// Catch-all route for undefined endpoints
-// app.use('*', (req, res) => {
-//     console.log(`[SERVER] 404 for ${req.method} ${req.originalUrl}`);
-//     res.status(404).json({ 
-//         error: 'not_found', 
-//         message: `Endpoint ${req.method} ${req.originalUrl} not found`,
-//         path: req.originalUrl
-//     });
-// });
-
-
-
-// Make io available to other modules
-app.set('io', io);
-
-server.listen(port, () => {
-  console.log(`🚀 Server running on http://localhost:${port}`);
-  console.log(`🔌 Socket.IO server ready`);
-  
-  // Start asset cleanup scheduler
-  assetCleanupScheduler.start();
-  console.log(`🧹 Asset cleanup scheduler started`);
-});
+};
