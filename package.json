@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
  "scripts": {
-  "start": "node index.js",
-  "dev": "node index.js",
+  "start": "node app-new.js",
+  "dev": "node app-new.js",
   "test": "echo \"No tests yet\"",
   "build": "npx prisma generate",
   "postinstall": "chmod +x ./node_modules/.bin/prisma && npx prisma generate"
