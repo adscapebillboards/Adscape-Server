@@ -4,10 +4,11 @@
   "main": "index.js",
  "scripts": {
   "start": "node index.js",
+  "dev": "node index.js",
   "test": "echo \"No tests yet\"",
   "build": "npx prisma generate",
-  "postinstall": "chmod +x ./node_modules/.bin/prisma && npx prisma generate",
-    "prestart": "chmod +x ./node_modules/.bin/prisma && npx prisma generate"
+  "postinstall": "chmod +x ./node_modules/.bin/prisma && npx prisma generate"
+    
 },
 
 "prisma": {
