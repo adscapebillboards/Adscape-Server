@@ -19,7 +19,8 @@ const io = new Server(server, {
       "https://adscape.co.in",
       "https://admin.adscape.co.in",
       "http://localhost:8080",
-      "http://127.0.0.1:5500"
+      "http://127.0.0.1:5500",
+      "https://endearing-begonia-927b56.netlify.app"
     ],
     methods: ["GET", "POST"],
     allowedHeaders: ["ngrok-skip-browser-warning"],
@@ -41,7 +42,8 @@ app.use(cors({
        "https://adscape.co.in",
        "https://admin.adscape.co.in",
        "http://localhost:8080",
-         "http://127.0.0.1:5500"
+         "http://127.0.0.1:5500",
+         "https://endearing-begonia-927b56.netlify.app"
     ];
     if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error("CORS not allowed for this origin"));

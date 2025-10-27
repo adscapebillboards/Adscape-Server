@@ -74,7 +74,8 @@ const allowedOrigins = new Set([
   'https://adscape-player.vercel.app',
   'https://adscape.co.in',
   'https://admin.adscape.co.in',
-  'http://127.0.0.1:5500'
+  'http://127.0.0.1:5500',
+  'https://endearing-begonia-927b56.netlify.app'
 ]);
 
 
