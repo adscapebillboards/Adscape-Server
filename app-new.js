@@ -73,7 +73,8 @@ const allowedOrigins = new Set([
   'http://localhost:5174',
   'https://adscape-player.vercel.app',
   'https://adscape.co.in',
-  'https://admin.adscape.co.in'
+  'https://admin.adscape.co.in',
+  'http://127.0.0.1:5500'
 ]);
 
 

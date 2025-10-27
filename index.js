@@ -18,7 +18,8 @@ const io = new Server(server, {
       "https://your-frontend-domain.com",
       "https://adscape.co.in",
       "https://admin.adscape.co.in",
-      "http://localhost:8080"
+      "http://localhost:8080",
+      "http://127.0.0.1:5500"
     ],
     methods: ["GET", "POST"],
     allowedHeaders: ["ngrok-skip-browser-warning"],
@@ -39,7 +40,8 @@ app.use(cors({
       "https://your-frontend-domain.com",
        "https://adscape.co.in",
        "https://admin.adscape.co.in",
-       "http://localhost:8080"
+       "http://localhost:8080",
+         "http://127.0.0.1:5500"
     ];
     if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error("CORS not allowed for this origin"));
