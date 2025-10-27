@@ -964,10 +964,10 @@ app.get('/api/debug/connections', (_req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-	console.log(`Server listening on :${PORT}`);
-});
+// const PORT = process.env.PORT || 4000;
+// server.listen(PORT, () => {
+// 	console.log(`Server listening on :${PORT}`);
+// });
 
 // Global error handler to ensure JSON responses
 app.use((err, req, res, next) => {
@@ -980,14 +980,14 @@ app.use((err, req, res, next) => {
 });
 
 // Catch-all route for undefined endpoints
-app.use('*', (req, res) => {
-    console.log(`[SERVER] 404 for ${req.method} ${req.originalUrl}`);
-    res.status(404).json({ 
-        error: 'not_found', 
-        message: `Endpoint ${req.method} ${req.originalUrl} not found`,
-        path: req.originalUrl
-    });
-});
+// app.use('*', (req, res) => {
+//     console.log(`[SERVER] 404 for ${req.method} ${req.originalUrl}`);
+//     res.status(404).json({ 
+//         error: 'not_found', 
+//         message: `Endpoint ${req.method} ${req.originalUrl} not found`,
+//         path: req.originalUrl
+//     });
+// });
 
 
 
