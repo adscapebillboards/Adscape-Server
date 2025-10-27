@@ -47,6 +47,19 @@ const availabilityRoutes = require('./routes/availability');
 
 const app = express();
 
+const http = require('http');
+const { Server } = require('socket.io');
+
+// create the HTTP server first
+const server = http.createServer(app);
+
+// then attach Socket.IO to it
+const io = new Server(server, {
+  cors: {
+    origin: '*'
+  }
+})
+
 // Middleware
 app.use(express.json());
 app.use(bodyParser.json());
@@ -62,6 +75,8 @@ const allowedOrigins = new Set([
   'https://adscape.co.in',
   'https://admin.adscape.co.in'
 ]);
+
+
 
 app.use(cors({
   origin: (origin, callback) => {
