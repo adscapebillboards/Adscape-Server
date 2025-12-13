@@ -81,7 +81,8 @@ const allowedOrigins = new Set([
   'https://admin.adscape.co.in',
   'http://127.0.0.1:5500',
   'https://endearing-begonia-927b56.netlify.app',
-  'https://bmi-client.onrender.com'
+  'https://bmi-client.onrender.com',
+  'https://admin.adscape.co.in'
 ]);
 
 
@@ -93,7 +94,11 @@ app.use(cors({
     if (allowedOrigins.has(origin)) return callback(null, true);
     return callback(null, false);
   },
-  credentials: false
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  preflightContinue: false,
+  optionsSuccessStatus: 200
 }));
 
 // Request logging middleware
@@ -625,14 +630,41 @@ app.mountBMIFlowRoutes = (io) => {
   logger.info('[BMI-MOUNT] ✅ BMI routes successfully mounted before error/404 handlers');
 };
 
+// Handle OPTIONS preflight requests before error handlers
+app.options('*', (req, res) => {
+  const origin = req.headers.origin;
+  if (allowedOrigins.has(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  res.status(200).end();
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
+  // Don't send error response for OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
   logger.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
 // 404 handler (must be last)
 app.use('*', (req, res) => {
+  // Don't send 404 for OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    const origin = req.headers.origin;
+    if (allowedOrigins.has(origin)) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+      res.header('Access-Control-Allow-Credentials', 'true');
+    }
+    return res.status(200).end();
+  }
   logger.warn('Route not found:', req.originalUrl);
   res.status(404).json({ error: 'Route not found' });
 });
