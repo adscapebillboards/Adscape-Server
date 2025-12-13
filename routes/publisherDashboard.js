@@ -16,37 +16,75 @@ router.get('/publisher-dashboard-stats', auth, async (req, res) => {
     });
     
     // Allow both 'publisher' and 'admin' roles (admin is publisher account)
-    // Also check if user exists in publisher table to verify they're a publisher
     if (!user || !user.email) {
+      console.log('Publisher dashboard: User not authenticated', { user });
       return res.status(403).json({ error: 'Access denied. User not authenticated.' });
     }
     
-    // Check if user is a publisher by looking them up in the database
-    const publisher = await prisma.publisher.findUnique({
-      where: { email: user.email },
-      select: { id: true, email: true, role: true, status: true }
-    });
-    
-    if (!publisher) {
-      console.log('Publisher not found in database:', user.email);
-      return res.status(403).json({ error: 'Access denied. Publisher account not found.' });
-    }
-    
-    // Allow if user role is publisher/admin OR if they exist in publisher table
+    // Check user role from JWT token first
     const allowedRoles = ['publisher', 'admin'];
-    const userRole = (user.role || publisher.role || 'publisher').toLowerCase();
+    const userRole = (user.role || '').toLowerCase();
+    let publisherEmail = user.email;
+    let hasAccess = false;
     
-    if (!allowedRoles.includes(userRole)) {
-      console.log('Role not allowed:', userRole, 'User role:', user.role, 'Publisher role:', publisher.role);
-      return res.status(403).json({ 
-        error: 'Access denied. Publisher or admin role required.',
-        userRole: user.role,
-        publisherRole: publisher.role
+    // If user has publisher/admin role in JWT, allow access
+    if (allowedRoles.includes(userRole)) {
+      console.log('Publisher dashboard: Access granted based on JWT role', {
+        userEmail: user.email,
+        userRole: user.role
       });
+      hasAccess = true;
+      
+      // Try to find publisher in database for email consistency, but don't require it
+      try {
+        const publisher = await prisma.publisher.findUnique({
+          where: { email: user.email },
+          select: { id: true, email: true, role: true, status: true }
+        });
+        
+        if (publisher) {
+          publisherEmail = publisher.email || user.email;
+        }
+      } catch (dbError) {
+        console.warn('Could not lookup publisher in database, using JWT email:', dbError);
+        // Continue with JWT email
+      }
+    } else {
+      // If role is not in JWT, check if user exists in publisher table
+      const publisher = await prisma.publisher.findUnique({
+        where: { email: user.email },
+        select: { id: true, email: true, role: true, status: true }
+      });
+      
+      if (!publisher) {
+        console.log('Publisher dashboard: Access denied - not found in database and no valid role', {
+          userEmail: user.email,
+          userRole: user.role
+        });
+        return res.status(403).json({ error: 'Access denied. Publisher account not found.' });
+      }
+      
+      const publisherRole = (publisher.role || '').toLowerCase();
+      if (!allowedRoles.includes(publisherRole)) {
+        console.log('Publisher dashboard: Access denied - invalid role', {
+          userEmail: user.email,
+          userRole: user.role,
+          publisherRole: publisher.role
+        });
+        return res.status(403).json({ 
+          error: 'Access denied. Publisher or admin role required.',
+          userRole: user.role,
+          publisherRole: publisher.role
+        });
+      }
+      
+      hasAccess = true;
+      publisherEmail = publisher.email || user.email;
     }
-
-    // Use publisher email from database to ensure consistency
-    const publisherEmail = publisher.email || user.email;
+    
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. Insufficient permissions.' });
+    }
     
     // Get publisher's billboards (all statuses for stats calculation)
     // Filter by userId (which stores the billboard owner's email in the user_id column)
