@@ -141,18 +141,11 @@ const updateBillboardStatus = async (req, res) => {
       data: { billboards }
     });
 
-    // If billboard is approved, generate slots for that specific billboard
+    // Note: Slot generation is now only done after payment completion, not on approval
+    // This ensures slots are only created when payment is confirmed
     if (status === 'APPROVED') {
-      logger.campaign('Billboard approved, generating slots', `Campaign ID: ${campaignId}, Billboard ID: ${billboardId}`);
-      
-      try {
-        const billboard = billboards[billboardIndex];
-        await generateSlotsForBillboard(campaignId, billboard);
-        logger.campaign('Slots generated successfully for billboard', `Billboard ID: ${billboardId}`);
-      } catch (slotError) {
-        logger.error('Error generating slots for billboard:', slotError);
-        // Don't fail the status update if slot generation fails
-      }
+      logger.campaign('Billboard approved', `Campaign ID: ${campaignId}, Billboard ID: ${billboardId}`);
+      logger.info('⚠️  Slot generation will occur after payment completion, not on approval');
     }
 
     // Check if all billboards are now approved
@@ -181,8 +174,9 @@ const updateBillboardStatus = async (req, res) => {
         
         logger.info(`✅ Campaign status updated to: ${campaignWithApprovedStatus.status}`);
         
-        // Generate slots for all approved billboards in the campaign
-        await generateSlotsForCampaign(campaignId, billboards);
+        // Note: Slot generation is now only done after payment completion, not on approval
+        // This ensures slots are only created when payment is confirmed
+        logger.info('⚠️  Slot generation will occur after payment completion, not on approval');
         
         // Update user metrics
         if (campaign.owner) {

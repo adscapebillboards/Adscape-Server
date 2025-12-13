@@ -106,6 +106,7 @@ model Billboard {
   slot_duration        Int?      @default(60)
   slot_start_time      String?   @default("09:00")
   slot_end_time        String?   @default("18:00")
+  slotAvailability     Json?     @map("slot_availability") // Stores 2 months of slot data: { "DD.MM.YYYY": available_slots }
 
   @@map("billboards")
 }

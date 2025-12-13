@@ -8,15 +8,53 @@ router.get('/publisher-dashboard-stats', auth, async (req, res) => {
   try {
     const user = req.user;
     
-    if (!user || user.role !== 'publisher') {
-      return res.status(403).json({ error: 'Access denied' });
+    // Log user info for debugging
+    console.log('Publisher dashboard request - User:', {
+      id: user?.id,
+      email: user?.email,
+      role: user?.role
+    });
+    
+    // Allow both 'publisher' and 'admin' roles (admin is publisher account)
+    // Also check if user exists in publisher table to verify they're a publisher
+    if (!user || !user.email) {
+      return res.status(403).json({ error: 'Access denied. User not authenticated.' });
+    }
+    
+    // Check if user is a publisher by looking them up in the database
+    const publisher = await prisma.publisher.findUnique({
+      where: { email: user.email },
+      select: { id: true, email: true, role: true, status: true }
+    });
+    
+    if (!publisher) {
+      console.log('Publisher not found in database:', user.email);
+      return res.status(403).json({ error: 'Access denied. Publisher account not found.' });
+    }
+    
+    // Allow if user role is publisher/admin OR if they exist in publisher table
+    const allowedRoles = ['publisher', 'admin'];
+    const userRole = (user.role || publisher.role || 'publisher').toLowerCase();
+    
+    if (!allowedRoles.includes(userRole)) {
+      console.log('Role not allowed:', userRole, 'User role:', user.role, 'Publisher role:', publisher.role);
+      return res.status(403).json({ 
+        error: 'Access denied. Publisher or admin role required.',
+        userRole: user.role,
+        publisherRole: publisher.role
+      });
     }
 
-    // Get publisher's billboards
+    // Use publisher email from database to ensure consistency
+    const publisherEmail = publisher.email || user.email;
+    
+    // Get publisher's billboards (all statuses for stats calculation)
+    // Filter by userId (which stores the billboard owner's email in the user_id column)
+    console.log('Fetching billboards for publisher:', publisherEmail);
     const publisherBillboards = await prisma.billboard.findMany({
       where: {
-        userId: user.email,
-        status: 'approved'
+        userId: publisherEmail
+        // No status filter - get all billboards for accurate stats
       },
       select: {
         id: true,
@@ -31,6 +69,9 @@ router.get('/publisher-dashboard-stats', auth, async (req, res) => {
     });
 
     const billboardIds = publisherBillboards.map(bb => bb.id);
+    console.log(`[publisherDashboard] Found ${publisherBillboards.length} billboards for publisher ${publisherEmail}`, {
+      billboardIds: billboardIds.slice(0, 5) // Log first 5 IDs
+    });
 
     // Get total revenue from campaigns that include publisher's billboards
     const campaigns = await prisma.campaign.findMany({
@@ -150,16 +191,22 @@ router.get('/publisher-dashboard-stats', auth, async (req, res) => {
     // Sort by revenue
     billboardPerformance.sort((a, b) => b.revenue - a.revenue);
 
+    // Calculate billboard status counts
+    const billboardStatusCounts = {
+      active: publisherBillboards.filter(bb => (bb.status || '').toLowerCase() === 'approved').length,
+      maintenance: publisherBillboards.filter(bb => (bb.status || '').toLowerCase() === 'maintenance').length,
+      offline: publisherBillboards.filter(bb => (bb.status || '').toLowerCase() === 'offline').length,
+      pending: publisherBillboards.filter(bb => (bb.status || '').toLowerCase() === 'pending').length,
+      approved: publisherBillboards.filter(bb => (bb.status || '').toLowerCase() === 'approved').length,
+      rejected: publisherBillboards.filter(bb => (bb.status || '').toLowerCase() === 'rejected').length
+    };
+
     const stats = {
       totalBillboards: publisherBillboards.length,
       totalBookings,
       activeBookings,
       totalRevenue,
-      billboardStatus: {
-        active: publisherBillboards.filter(bb => bb.status === 'approved').length,
-        maintenance: publisherBillboards.filter(bb => bb.status === 'maintenance').length,
-        offline: publisherBillboards.filter(bb => bb.status === 'offline').length
-      },
+      billboardStatus: billboardStatusCounts,
       revenueData,
       recentBookings: recentBookings.slice(0, 5),
       billboardPerformance: billboardPerformance.slice(0, 5)
@@ -178,15 +225,29 @@ router.get('/publisher-revenue-series', auth, async (req, res) => {
     const user = req.user;
     const period = req.query.period || 'month';
     
-    if (!user || user.role !== 'publisher') {
-      return res.status(403).json({ error: 'Access denied' });
+    if (!user || !user.email) {
+      return res.status(403).json({ error: 'Access denied. User not authenticated.' });
     }
+    
+    // Check if user is a publisher by looking them up in the database
+    const publisher = await prisma.publisher.findUnique({
+      where: { email: user.email },
+      select: { id: true, email: true, role: true }
+    });
+    
+    if (!publisher) {
+      return res.status(403).json({ error: 'Access denied. Publisher account not found.' });
+    }
+    
+    // Use publisher email from database to ensure consistency
+    const publisherEmail = publisher.email || user.email;
 
-    // Get publisher's billboards
+    // Get publisher's billboards (all statuses for revenue calculation)
+    // Filter by userId (which stores the billboard owner's email in the user_id column)
     const publisherBillboards = await prisma.billboard.findMany({
       where: {
-        userId: user.email,
-        status: 'approved'
+        userId: publisherEmail
+        // No status filter - include all billboards for revenue calculation
       },
       select: { id: true }
     });

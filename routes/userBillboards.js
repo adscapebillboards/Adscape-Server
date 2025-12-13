@@ -8,7 +8,11 @@ const roleAuth = require('../middleware/roleAuth');
 // User billboards with role-based filtering
 router.get('/userbillboards', auth, async (req, res) => {
   try {
-    const user = req.user; // From getUserInfo middleware
+    const user = req.user; // From auth middleware (JWT token)
+    
+    if (!user || !user.email) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
     
     let whereClause = {};
     
@@ -17,7 +21,9 @@ router.get('/userbillboards', auth, async (req, res) => {
       // Superadmin can see all billboards
       whereClause = {};
     } else {
-      // Publishers and users can only see their own billboards
+      // Publishers and admins can only see their own billboards
+      // Filter by userId (which stores the billboard owner's email in the user_id column)
+      // Note: userId field in Prisma maps to user_id column in database
       whereClause = {
         userId: user.email
       };
@@ -30,6 +36,12 @@ router.get('/userbillboards', auth, async (req, res) => {
       }
     });
 
+    console.log(`[userBillboards] Fetched billboards for ${user.role}`, {
+      userEmail: user.email,
+      count: billboards.length,
+      whereClause: whereClause
+    });
+    
     logger.billboard(`User billboards fetched for ${user.role}`, `User: ${user.email}, Count: ${billboards.length}`, { role: user.role });
     res.json(billboards);
   } catch (error) {

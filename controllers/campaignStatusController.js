@@ -53,14 +53,32 @@ const updateCampaignStatusByDate = async (campaignId) => {
       const endDate = convertUTCToIST(billboard.bookingDetails.endDate);
       let billboardStatus = billboard.status;
 
-      // Determine billboard status based on dates (using IST time)
-      if (now < startDate) {
-        billboardStatus = 'SCHEDULED';
-      } else if (now >= startDate && now <= endDate) {
-        billboardStatus = 'LIVE';
-      } else if (now > endDate) {
-        billboardStatus = 'COMPLETED';
-      }
+      // Only update to SCHEDULED/LIVE/COMPLETED if campaign is approved and payment completed
+    // Campaign lifecycle: PENDING -> APPROVED -> PAYMENT_PENDING -> PAYMENT_COMPLETED -> SCHEDULED -> LIVE -> COMPLETED
+    const canSchedule = campaign.status === 'PAYMENT_COMPLETED' || 
+                        campaign.status === 'SCHEDULED' || 
+                        campaign.status === 'LIVE' || 
+                        campaign.status === 'COMPLETED';
+    
+    if (!canSchedule) {
+      // Campaign hasn't been approved or payment isn't completed, don't change status
+      logger.info(`Campaign ${campaignId} is in ${campaign.status} status. Skipping date-based status update.`);
+      return {
+        campaign,
+        updatedBillboards: [],
+        statusChanged: false,
+        reason: `Campaign must be PAYMENT_COMPLETED before scheduling. Current status: ${campaign.status}`
+      };
+    }
+
+    // Determine billboard status based on dates (using IST time) - only for approved and paid campaigns
+    if (now < startDate) {
+      billboardStatus = 'SCHEDULED';
+    } else if (now >= startDate && now <= endDate) {
+      billboardStatus = 'LIVE';
+    } else if (now > endDate) {
+      billboardStatus = 'COMPLETED';
+    }
 
       // Update billboard status if it has changed
       if (billboardStatus !== billboard.status) {
@@ -73,6 +91,7 @@ const updateCampaignStatusByDate = async (campaignId) => {
     }
 
     // Determine overall campaign status based on billboard statuses
+    // Only update to SCHEDULED/LIVE/COMPLETED if campaign is already PAYMENT_COMPLETED or later
     const billboardStatuses = billboards.map(b => b.status);
     const hasLiveBillboards = billboardStatuses.includes('LIVE');
     const hasScheduledBillboards = billboardStatuses.includes('SCHEDULED');
@@ -81,15 +100,17 @@ const updateCampaignStatusByDate = async (campaignId) => {
 
     let newCampaignStatus = campaignStatus;
 
-    if (hasLiveBillboards) {
-      newCampaignStatus = 'LIVE';
-    } else if (allCompleted) {
-      newCampaignStatus = 'COMPLETED';
-    } else if (allScheduled) {
-      newCampaignStatus = 'SCHEDULED';
-    } else if (hasScheduledBillboards) {
-      newCampaignStatus = 'SCHEDULED';
+    // Only update status if campaign is in PAYMENT_COMPLETED or later stage
+    if (campaignStatus === 'PAYMENT_COMPLETED' || campaignStatus === 'SCHEDULED' || campaignStatus === 'LIVE' || campaignStatus === 'COMPLETED') {
+      if (hasLiveBillboards) {
+        newCampaignStatus = 'LIVE';
+      } else if (allCompleted) {
+        newCampaignStatus = 'COMPLETED';
+      } else if (allScheduled || hasScheduledBillboards) {
+        newCampaignStatus = 'SCHEDULED';
+      }
     }
+    // If campaign is not yet approved/paid, keep current status (PENDING, APPROVED, PAYMENT_PENDING, etc.)
 
     // Update campaign if there are changes
     if (hasChanges || newCampaignStatus !== campaign.status) {
@@ -135,8 +156,29 @@ const updateAllCampaignsStatusByDate = async () => {
   try {
     logger.info('Starting batch update of all campaigns status by date');
     
-    // Get all campaigns
-    const campaigns = await prisma.campaign.findMany();
+    // Test database connection first
+    try {
+      await prisma.$connect();
+      logger.info('✅ Database connection established');
+    } catch (connectError) {
+      logger.error('❌ Database connection failed:', connectError.message);
+      logger.error('⚠️  Troubleshooting steps:');
+      logger.error('   1. Check if Azure PostgreSQL server is running');
+      logger.error('   2. Verify your IP is added to Azure firewall rules');
+      logger.error('   3. Check network connectivity to adscape-database.postgres.database.azure.com:5432');
+      logger.error('   4. Verify DATABASE_URL in .env file is correct');
+      throw new Error('Database connection unavailable. Please check Azure firewall rules and network connectivity.');
+    }
+    
+    // Get only campaigns that are PAYMENT_COMPLETED or later
+    // This ensures we don't accidentally update campaigns that are still pending approval
+    const campaigns = await prisma.campaign.findMany({
+      where: {
+        status: {
+          in: ['PAYMENT_COMPLETED', 'SCHEDULED', 'LIVE', 'COMPLETED']
+        }
+      }
+    });
 
     logger.info(`Found ${campaigns.length} campaigns to process`);
 

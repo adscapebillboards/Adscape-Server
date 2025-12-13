@@ -248,9 +248,16 @@ const updateCampaignStatus = async (req, res) => {
       }
     });
 
+    // Note: Slot generation is now only done after payment completion, not on approval
+    // This ensures slots are only created when payment is confirmed
     if (status === 'APPROVED') {
-      // Generate slots for the approved campaign
-      logger.campaign('Campaign approved, generating slots', `Campaign ID: ${id}`);
+      logger.campaign('Campaign approved', `Campaign ID: ${id}`);
+      logger.info('⚠️  Slot generation will occur after payment completion, not on approval');
+    }
+    
+    // Generate slots when payment is completed
+    if (status === 'PAYMENT_COMPLETED') {
+      logger.campaign('Payment completed, generating slots', `Campaign ID: ${id}`);
       
       try {
         // Fetch the campaign with billboards data
@@ -260,12 +267,12 @@ const updateCampaignStatus = async (req, res) => {
         
         if (campaignWithBillboards) {
           await generateSlots(campaignWithBillboards);
-          logger.campaign('Slots generated successfully', `Campaign ID: ${id}`);
+          logger.campaign('Slots generated successfully after payment', `Campaign ID: ${id}`);
         } else {
           logger.error('Campaign not found for slot generation', `Campaign ID: ${id}`);
         }
       } catch (slotError) {
-        logger.error('Error generating slots:', slotError);
+        logger.error('Error generating slots after payment:', slotError);
         // Don't fail the status update if slot generation fails
       }
     }
@@ -320,18 +327,11 @@ const updateBillboardStatus = async (req, res) => {
       data: { billboards }
     });
 
-    // If billboard is approved, generate slots for that specific billboard
+    // Note: Slot generation is now only done after payment completion, not on approval
+    // This ensures slots are only created when payment is confirmed
     if (status === 'APPROVED') {
-      logger.campaign('Billboard approved, generating slots', `Campaign ID: ${campaignId}, Billboard ID: ${billboardId}`);
-      
-      try {
-        const billboard = billboards[billboardIndex];
-        await generateSlotsForBillboard(campaignId, billboard);
-        logger.campaign('Slots generated successfully for billboard', `Billboard ID: ${billboardId}`);
-      } catch (slotError) {
-        logger.error('Error generating slots for billboard:', slotError);
-        // Don't fail the status update if slot generation fails
-      }
+      logger.campaign('Billboard approved', `Campaign ID: ${campaignId}, Billboard ID: ${billboardId}`);
+      logger.info('⚠️  Slot generation will occur after payment completion, not on approval');
     }
 
     logger.campaign('Billboard status updated', `Campaign ID: ${campaignId}, Billboard ID: ${billboardId}, Status: ${status}`);

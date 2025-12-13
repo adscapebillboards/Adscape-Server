@@ -1,6 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
-const { recomputeAndUpsertForRange, ensureDefaultAvailabilityForTwoMonths } = require('./availabilityController');
+const { recomputeAndUpsertForRange, ensureDefaultAvailabilityForTwoMonths, updateBillboardSlotAvailabilityJSON } = require('./availabilityController');
 // Helper to convert various duration formats to seconds
 function toSeconds(input) {
   if (!input) return 10;
@@ -43,17 +43,44 @@ const createCampaign = async (req, res) => {
     logger.info('Request file:', req.file);
     logger.info('Content-Type header:', req.headers['content-type']);
     
-    if (!req.body.data) {
-      return res.status(400).json({ error: 'Missing campaign data' });
-    }
-
+    // Handle both request formats:
+    // 1. New format: individual form fields (campaignName, userName, billboards, etc.)
+    // 2. Old format: req.body.data as JSON string
     let campaignData;
-    try {
-      campaignData = JSON.parse(req.body.data);
-      logger.info('Parsed campaign data:', campaignData);
-    } catch (parseError) {
-      logger.error('Error parsing campaign data:', parseError);
-      return res.status(400).json({ error: 'Invalid JSON data' });
+    
+    if (req.body.data) {
+      // Old format: data is a JSON string
+      try {
+        campaignData = JSON.parse(req.body.data);
+        logger.info('Parsed campaign data from req.body.data:', campaignData);
+      } catch (parseError) {
+        logger.error('Error parsing campaign data:', parseError);
+        return res.status(400).json({ error: 'Invalid JSON data' });
+      }
+    } else if (req.body.billboards) {
+      // New format: individual form fields
+      // Parse billboards if it's a string
+      let billboards = req.body.billboards;
+      if (typeof billboards === 'string') {
+        try {
+          billboards = JSON.parse(billboards);
+        } catch (e) {
+          logger.error('Error parsing billboards string:', e);
+          return res.status(400).json({ error: 'Invalid billboards JSON' });
+        }
+      }
+      
+      campaignData = {
+        userName: req.body.userName,
+        campaignName: req.body.campaignName,
+        startDate: req.body.startDate,
+        endDate: req.body.endDate,
+        totalAmount: req.body.totalAmount,
+        billboards: billboards
+      };
+      logger.info('Constructed campaign data from form fields:', campaignData);
+    } else {
+      return res.status(400).json({ error: 'Missing campaign data. Expected either req.body.data or individual form fields.' });
     }
 
     const { userName, billboards, campaignName } = campaignData;
@@ -66,25 +93,64 @@ const createCampaign = async (req, res) => {
     logger.info('Received campaign data:', { userName, billboardsCount: billboards.length });
     logger.info('First billboard sample:', billboards[0]);
 
-    const uploadedFiles = req.files || [];
+    // Handle files - check both req.files (array) and req.file (single)
+    const uploadedFiles = [];
+    if (req.files && Array.isArray(req.files)) {
+      uploadedFiles.push(...req.files);
+      logger.info('Files from req.files array:', req.files.length);
+    }
+    if (req.file) {
+      uploadedFiles.push(req.file);
+      logger.info('File from req.file:', req.file.originalname);
+    }
+    
+    // Also check if files are in req.body (sometimes multer puts them there)
+    if (req.body.files) {
+      logger.info('Files found in req.body.files');
+    }
+    
     logger.campaign('Campaign creation started', `User: ${userName}, Billboards: ${billboards.length}`);
-    logger.info('Uploaded files count:', uploadedFiles.length);
-    logger.info('Uploaded files:', uploadedFiles.map(f => ({ name: f?.originalname, size: f?.size })));
-    logger.info('Billboard IDs from request:', billboards.map(b => b.id));
+    logger.info('Total uploaded files count:', uploadedFiles.length);
+    logger.info('Uploaded files details:', uploadedFiles.map(f => ({ 
+      name: f?.originalname, 
+      size: f?.size,
+      mimetype: f?.mimetype,
+      fieldname: f?.fieldname
+    })));
+    logger.info('Billboard IDs from request:', billboards.map(b => b.id || b.billboardId || b.billboard?.id));
 
     const campaignId = uuidv4();
 
     const enrichedBillboards = await Promise.all(billboards.map(async (billboard) => {
-      if (!billboard || !billboard.id || !billboard.bookingDetails) {
-        logger.error('Invalid billboard data:', billboard);
-        throw new Error('Invalid billboard data structure');
+      // Handle different billboard data structures
+      // Could be: { id, bookingDetails } or { billboardId, billboard: {...}, startDate, endDate }
+      const billboardObj = billboard.billboard || billboard;
+      const id = billboardObj.id || billboard.billboardId || billboard.id;
+      
+      // Get booking details - could be in bookingDetails or directly in billboard
+      let bookingDetails = billboard.bookingDetails || billboardObj.bookingDetails;
+      if (!bookingDetails && (billboard.startDate || billboard.endDate)) {
+        bookingDetails = {
+          startDate: billboard.startDate,
+          endDate: billboard.endDate
+        };
+      }
+      
+      if (!id || !bookingDetails || !bookingDetails.startDate || !bookingDetails.endDate) {
+        logger.error('Invalid billboard data structure:', {
+          hasId: !!id,
+          hasBookingDetails: !!bookingDetails,
+          billboardKeys: Object.keys(billboard),
+          billboardObjKeys: billboardObj ? Object.keys(billboardObj) : 'N/A'
+        });
+        throw new Error('Invalid billboard data structure: missing id or bookingDetails');
       }
 
-      logger.info('Processing billboard:', billboard);
+      logger.info('Processing billboard:', { id, bookingDetails });
 
-      const { id, location, city, pricePerDay, bookingDetails, owner } = billboard;
+      const { location, city, pricePerDay, owner } = billboardObj;
       // Extract screen_id from multiple possible field names
-      const screen_id = billboard.screen_id || billboard.screenId || null;
+      const screen_id = billboardObj.screen_id || billboardObj.screenId || billboard.screen_id || billboard.screenId || null;
       const { startDate, endDate } = bookingDetails;
 
       // Log the billboard data to see what's available
@@ -106,21 +172,32 @@ const createCampaign = async (req, res) => {
 
       const fileUrls = [];
 
-      const matchingFiles = uploadedFiles.filter(file =>
-        file && file.originalname && file.originalname.startsWith(`${id}_`)
-      );
+      // Get billboard ID - could be in different fields
+      const billboardId = id || billboard.billboardId || billboard.billboard?.id || billboard.id;
+      
+      logger.info(`Billboard ${billboardId}: Looking for files matching pattern "${billboardId}_"`);
+      
+      const matchingFiles = uploadedFiles.filter(file => {
+        if (!file || !file.originalname) return false;
+        // Check if file name starts with billboard ID followed by underscore
+        const matches = file.originalname.startsWith(`${billboardId}_`);
+        if (matches) {
+          logger.info(`Billboard ${billboardId}: Found matching file: ${file.originalname}`);
+        }
+        return matches;
+      });
 
       // Check for files that don't match the pattern
       const nonMatchingFiles = uploadedFiles.filter(file =>
-        file && file.originalname && !file.originalname.startsWith(`${id}_`)
+        file && file.originalname && !file.originalname.startsWith(`${billboardId}_`)
       );
       
       if (nonMatchingFiles.length > 0) {
-        logger.warn(`Billboard ${id}: Found ${nonMatchingFiles.length} non-matching files:`, nonMatchingFiles.map(f => f?.originalname));
+        logger.warn(`Billboard ${billboardId}: Found ${nonMatchingFiles.length} non-matching files:`, nonMatchingFiles.map(f => f?.originalname));
       }
 
-      logger.info(`Billboard ${id}: Found ${matchingFiles.length} matching files`);
-      logger.info(`Billboard ${id}: Matching files:`, matchingFiles.map(f => f?.originalname));
+      logger.info(`Billboard ${billboardId}: Found ${matchingFiles.length} matching files`);
+      logger.info(`Billboard ${billboardId}: Matching files:`, matchingFiles.map(f => f?.originalname));
 
 const streamUpload = (fileBuffer) => {
   return new Promise((resolve, reject) => {
@@ -158,16 +235,16 @@ const streamUpload = (fileBuffer) => {
 
       const enrichedBillboard = {
         id,
-        location,
-        city,
-        pricePerDay,
+        location: location || billboardObj.location,
+        city: city || billboardObj.city,
+        pricePerDay: pricePerDay || billboardObj.pricePerDay,
         totalPrice, // Add total price for this billboard
         bookingDetails: {
           startDate,
           endDate
         },
         files: fileUrls,
-        owner,
+        owner: owner || billboardObj.owner,
         screen_id: screen_id, // Ensure screen_id is stored
         // Campaign-related information for each billboard
         userName: userName,
@@ -175,7 +252,8 @@ const streamUpload = (fileBuffer) => {
         createDate: new Date().toISOString(),
         endDate: endDate,
         billboardCampaignId: `${campaignId}_${id}`, // Generate unique billboard campaign ID
-        // Keep all existing billboard details
+        // Keep all existing billboard details from the original billboard object
+        ...billboardObj,
         ...billboard
       };
 
@@ -199,31 +277,70 @@ const streamUpload = (fileBuffer) => {
       files: b.files
     })));
 
-    await prisma.campaign.create({
-      data: {
-        id: campaignId,
-        userName,
-        campaignName: campaignName || "Auto Campaign",
-        status: "PENDING",
-        totalAmount,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
-        billboards: enrichedBillboards
+    // Test database connection before attempting to save
+    try {
+      await prisma.$connect();
+      logger.info('✅ Database connection verified');
+    } catch (dbError) {
+      logger.error('❌ Database connection failed:', dbError.message);
+      logger.error('⚠️  Campaign cannot be saved. Please check database connectivity.');
+      return res.status(503).json({ 
+        error: 'Database unavailable',
+        message: 'Cannot save campaign. Database server is unreachable. Please check your connection and try again.',
+        details: 'The database server at adscape-database.postgres.database.azure.com:5432 cannot be reached. Please verify Azure firewall rules and network connectivity.'
+      });
+    }
+
+    try {
+      await prisma.campaign.create({
+        data: {
+          id: campaignId,
+          userName,
+          campaignName: campaignName || "Auto Campaign",
+          status: "PENDING",
+          totalAmount,
+          startDate: new Date(startDate),
+          endDate: new Date(endDate),
+          billboards: enrichedBillboards
+        }
+      });
+      logger.info('✅ Campaign saved to database successfully');
+    } catch (dbSaveError) {
+      logger.error('❌ Failed to save campaign to database:', dbSaveError.message);
+      logger.error('Error code:', dbSaveError.code);
+      logger.error('Error meta:', dbSaveError.meta);
+      
+      // Check if it's a connection error
+      if (dbSaveError.code === 'P1001' || dbSaveError.message.includes('Can\'t reach database server')) {
+        return res.status(503).json({ 
+          error: 'Database connection failed',
+          message: 'Cannot save campaign. Database server is unreachable.',
+          details: 'Please check Azure firewall rules and ensure the database server is running.'
+        });
       }
-    });
+      
+      // Re-throw other database errors
+      throw dbSaveError;
+    }
 
     // After create, initialize and update availability cache for involved billboards
     try {
       for (const b of enrichedBillboards) {
         await ensureDefaultAvailabilityForTwoMonths(String(b.id));
         await recomputeAndUpsertForRange(String(b.id), b.bookingDetails?.startDate || startDate, b.bookingDetails?.endDate || endDate);
+        // Update the slotAvailability JSON field on the billboard (stores 2 months in one JSON)
+        await updateBillboardSlotAvailabilityJSON(String(b.id));
       }
     } catch (e) {
       logger.warn('Availability upsert after campaign creation failed:', e.message);
     }
 
     // Notifications: to superadmin and campaign owner
+    // Only create notifications if database is available
     try {
+      // Test connection before creating notifications
+      await prisma.$connect();
+      
       await prisma.$executeRawUnsafe(
         "INSERT INTO notifications (recipient_role, type, title, message, entity_type, entity_id) VALUES ('superadmin', $1, $2, $3, $4, $5)",
         'CAMPAIGN_CREATED',
@@ -242,8 +359,11 @@ const streamUpload = (fileBuffer) => {
         'campaign',
         String(campaignId)
       );
+      logger.info('✅ Campaign creation notifications created');
     } catch (e) {
-      logger.warn('Failed to create campaign creation notifications:', e.message);
+      // Don't fail the entire request if notifications fail
+      logger.warn('⚠️  Failed to create campaign creation notifications:', e.message);
+      logger.warn('Campaign was created successfully, but notifications could not be sent');
     }
 
     logger.campaign('Campaign created successfully', `ID: ${campaignId}, User: ${userName}`);
@@ -264,19 +384,76 @@ const streamUpload = (fileBuffer) => {
 
 // Get campaigns by user
 const getCampaignsByUser = async (req, res) => {
-  const { user } = req.query;
-  logger.campaign('Fetching campaigns', `User: ${user}`);
+  // Try to get user from auth token first, then from query parameter
+  let userIdentifier = req.query.user;
+  let userEmail = null;
+  let userName = null;
+  
+  // If no query param, try to get from auth token
+  if (!userIdentifier && req.user) {
+    // Use email as primary identifier, fallback to name
+    userIdentifier = req.user.email || req.user.name;
+    userEmail = req.user.email;
+    userName = req.user.name;
+    logger.info('Using user from auth token:', { userIdentifier, userEmail, userName });
+  } else if (userIdentifier) {
+    // If identifier looks like an email, treat it as email
+    if (userIdentifier.includes('@')) {
+      userEmail = userIdentifier;
+      // Try to find user by email to get their name for matching old campaigns
+      try {
+        const user = await prisma.user.findUnique({
+          where: { email: userEmail },
+          select: { name: true, email: true }
+        });
+        if (user) {
+          userName = user.name;
+          logger.info('Found user by email:', { email: userEmail, name: userName });
+        }
+      } catch (userLookupError) {
+        logger.warn('Could not lookup user by email:', userLookupError.message);
+      }
+    } else {
+      // Assume it's a name
+      userName = userIdentifier;
+    }
+  }
+  
+  logger.campaign('Fetching campaigns', `User: ${userIdentifier}, Email: ${userEmail}, Name: ${userName}`);
+  
+  if (!userIdentifier) {
+    logger.warn('No user identifier provided for campaign fetch');
+    return res.status(400).json({ error: 'User identifier required' });
+  }
   
   try {
+    // Match campaigns by userName (which could be name or email)
+    // Build OR conditions to match both email and name for backward compatibility
+    const whereConditions = [];
+    
+    // Always match by the provided identifier
+    whereConditions.push({ userName: userIdentifier });
+    
+    // If we have both email and name, also match by name (for old campaigns created with name)
+    if (userEmail && userName && userEmail !== userName) {
+      whereConditions.push({ userName: userName });
+    }
+    // If identifier is email but we found a name, also match by name
+    if (userEmail === userIdentifier && userName && userName !== userIdentifier) {
+      whereConditions.push({ userName: userName });
+    }
+    
     const campaigns = await prisma.campaign.findMany({
       where: {
-        userName: user
+        OR: whereConditions
       },
       orderBy: {
         createdAt: 'desc'
       }
     });
-    logger.campaign('Campaigns fetched', `User: ${user}, Count: ${campaigns.length}`);
+    
+    logger.campaign('Campaigns fetched', `User: ${userIdentifier}, Count: ${campaigns.length}`);
+    logger.info('Matched campaigns by:', whereConditions);
     res.json(campaigns);
   } catch (err) {
     logger.error('Error fetching campaigns:', err);
@@ -300,14 +477,60 @@ const getAllCampaigns = async (req, res) => {
   }
 };
 
-// Get campaigns by user email (for billboard owners)
+// Get campaigns by user email (for billboard owners/publishers)
 const getCampaignsByUserEmail = async (req, res) => {
   const { userEmail } = req.query;
 
+  if (!userEmail) {
+    return res.status(400).json({ error: 'User email is required' });
+  }
+
   try {
-    // For now, return empty array to test if endpoint works
-    logger.campaign('User campaigns fetched (owner view)', `User: ${userEmail}, Count: 0`);
-    res.json([]);
+    // Get publisher's billboards
+    // Filter by userId (which stores the billboard owner's email in the user_id column)
+    const publisherBillboards = await prisma.billboard.findMany({
+      where: {
+        userId: userEmail
+      },
+      select: {
+        id: true
+      }
+    });
+
+    const billboardIds = publisherBillboards.map(bb => bb.id);
+
+    if (billboardIds.length === 0) {
+      logger.campaign('No billboards found for publisher', `User: ${userEmail}`);
+      return res.json([]);
+    }
+
+    // Get all campaigns
+    const allCampaigns = await prisma.campaign.findMany({
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    // Filter campaigns that include at least one of the publisher's billboards
+    const filteredCampaigns = allCampaigns.filter(campaign => {
+      let billboards = campaign.billboards;
+      if (typeof billboards === 'string') {
+        try {
+          billboards = JSON.parse(billboards);
+        } catch {
+          return false;
+        }
+      }
+
+      if (Array.isArray(billboards)) {
+        return billboards.some(bb => billboardIds.includes(bb.id));
+      }
+
+      return false;
+    });
+
+    logger.campaign('User campaigns fetched (owner view)', `User: ${userEmail}, Count: ${filteredCampaigns.length}`);
+    res.json(filteredCampaigns);
   } catch (err) {
     logger.error("Error fetching user campaigns:", err);
     res.status(500).json({ error: "Internal Server Error" });
@@ -321,13 +544,33 @@ const updateCampaignStatus = async (req, res) => {
   const { status } = req.body;
 
   try {
-    const campaign = await prisma.campaign.update({
-      where: { id },
-      data: { status }
+    // Get current campaign to check dates
+    const currentCampaign = await prisma.campaign.findUnique({
+      where: { id }
     });
 
-    if (status.toLowerCase() === 'approved') {
-      logger.campaign('Campaign approved, generating slots', `Campaign ID: ${id}`);
+    if (!currentCampaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    let newStatus = status.toUpperCase();
+    
+    // Prevent skipping payment step - campaigns must be PAYMENT_COMPLETED before SCHEDULED
+    if (newStatus === 'SCHEDULED' || newStatus === 'LIVE') {
+      const currentStatus = currentCampaign.status?.toUpperCase();
+      if (currentStatus !== 'PAYMENT_COMPLETED' && currentStatus !== 'SCHEDULED' && currentStatus !== 'LIVE') {
+        logger.warn(`Cannot set campaign ${id} to ${newStatus} - payment not completed. Current status: ${currentStatus}`);
+        return res.status(400).json({ 
+          error: 'Invalid status transition', 
+          message: `Campaign must be PAYMENT_COMPLETED before it can be ${newStatus}`,
+          currentStatus: currentCampaign.status
+        });
+      }
+    }
+    
+    // If setting to PAYMENT_COMPLETED, generate slots and schedule
+    if (newStatus === 'PAYMENT_COMPLETED') {
+      logger.campaign('Payment completed, generating slots and scheduling', `Campaign ID: ${id}`);
 
       try {
         // Fetch campaign with billboards
@@ -335,7 +578,8 @@ const updateCampaignStatus = async (req, res) => {
           where: { id },
           select: {
             id: true,
-            billboards: true
+            billboards: true,
+            startDate: true
           }
         });
 
@@ -357,15 +601,36 @@ const updateCampaignStatus = async (req, res) => {
             billboards: parsedBillboards
           };
 
+          // Generate slots after payment completion
           await generateSlots(campaignWithParsedBillboards);
-          logger.campaign('Slots generated successfully', `Campaign ID: ${id}`);
+          logger.campaign('Slots generated successfully after payment', `Campaign ID: ${id}`);
+
+          // Now check if we should auto-schedule based on start date
+          const now = new Date();
+          const startDate = new Date(campaignWithBillboards.startDate);
+          
+          // If start date hasn't arrived, set to SCHEDULED
+          if (now < startDate) {
+            newStatus = 'SCHEDULED';
+            logger.info(`Campaign ${id} payment completed. Auto-scheduling (start date: ${startDate})`);
+          } else {
+            // Start date has passed, set to LIVE
+            newStatus = 'LIVE';
+            logger.info(`Campaign ${id} payment completed. Auto-activating (start date already passed)`);
+          }
         } else {
           logger.error('Campaign not found for slot generation', `Campaign ID: ${id}`);
         }
       } catch (slotError) {
-        logger.error('Error generating slots:', slotError);
+        logger.error('Error generating slots after payment:', slotError);
+        // Don't fail the status update if slot generation fails, but log it
       }
     }
+
+    const campaign = await prisma.campaign.update({
+      where: { id },
+      data: { status: newStatus }
+    });
 
     logger.campaign('Campaign status updated', `Campaign ID: ${id}, Status: ${status}`);
     res.json({ message: 'Status updated', campaign });
@@ -785,6 +1050,8 @@ const generateSlotsForCampaign = async (campaignId, billboards) => {
     for (const billboard of approvedBillboards) {
       try {
         await generateSlotsForBillboard(campaignId, billboard);
+        // Update the slotAvailability JSON field after generating slots
+        await updateBillboardSlotAvailabilityJSON(String(billboard.id));
       } catch (error) {
         logger.error(`❌ Error generating slots for billboard ${billboard.id}:`, error);
         // Continue with other billboards

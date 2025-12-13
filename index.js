@@ -1016,11 +1016,45 @@ app.use((err, req, res, next) => {
 // Make io available to other modules
 app.set('io', io);
 
-server.listen(port, () => {
-  console.log(`🚀 Server running on http://localhost:${port}`);
-  console.log(`🔌 Socket.IO server ready`);
+// Test database connection on startup
+async function testDatabaseConnection() {
+  try {
+    console.log('🔌 Testing database connection...');
+    await prisma.$connect();
+    console.log('✅ Database connected successfully');
+    
+    // Test a simple query
+    await prisma.$queryRaw`SELECT 1`;
+    console.log('✅ Database query test passed');
+  } catch (error) {
+    console.error('❌ Database connection failed:', error.message);
+    console.error('Error details:', {
+      code: error.code,
+      meta: error.meta,
+      message: error.message
+    });
+    console.error('\n⚠️  Please check your .env file and ensure:');
+    console.error('   - DATABASE_URL is set, OR');
+    console.error('   - PGHOST, PGUSER, PGPASSWORD, PGPORT, PGDATABASE are all set');
+    process.exit(1);
+  }
+}
+
+// Start server with database connection test
+async function startServer() {
+  await testDatabaseConnection();
   
-  // Start asset cleanup scheduler
-  assetCleanupScheduler.start();
-  console.log(`🧹 Asset cleanup scheduler started`);
+  server.listen(port, () => {
+    console.log(`🚀 Server running on http://localhost:${port}`);
+    console.log(`🔌 Socket.IO server ready`);
+    
+    // Start asset cleanup scheduler
+    assetCleanupScheduler.start();
+    console.log(`🧹 Asset cleanup scheduler started`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error('❌ Failed to start server:', error);
+  process.exit(1);
 });

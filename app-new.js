@@ -69,6 +69,7 @@ app.use(express.json());
 app.use(bodyParser.json());
 const allowedOrigins = new Set([
   'http://localhost:3000',
+  'http://localhost:3003',
   'http://localhost:8080',
   'https://www.adscapebillboards.com',
   'https://billboard-frontend-development.vercel.app',

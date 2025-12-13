@@ -76,41 +76,42 @@ exports.getCitiesByState = async (req, res) => {
 // Get all billboards with role-based filtering and approval status
 exports.getAllBillboards = async (req, res) => {
   try {
-    const user = req.user; // From getUserInfo middleware
+    const user = req.user; // From auth middleware (JWT token)
+    
+    if (!user || !user.email) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
     
     let whereClause = {};
     
     // Role-based filtering
+    // Filter by userId (which stores the billboard owner's email in the user_id column)
     if (user.role === 'superadmin') {
       // Superadmin can see all billboards (including pending ones)
       whereClause = {};
-    } else if (user.role === 'admin') {
-      // Admin users can see their own billboards (including pending ones)
-      whereClause = {
-        userId: user.email
-      };
-    } else if (user.role === 'publisher') {
-      // Publishers can only see their own billboards (including pending ones)
-      whereClause = {
-        userId: user.email
-      };
-    } else if (user.role === 'user') {
-      // Users can only see their own billboards (including pending ones)
-      whereClause = {
-        userId: user.email
-      };
     } else {
-      // Default: users can only see their own billboards
+      // Publishers, admins, and users can only see their own billboards
+      // Filter by userId (which stores the billboard owner's email in the user_id column)
       whereClause = {
         userId: user.email
       };
     }
+    
+    console.log(`[getAllBillboards] Fetching billboards for ${user.role}`, {
+      userEmail: user.email,
+      whereClause: whereClause
+    });
     
     const billboards = await prisma.billboard.findMany({
       where: whereClause,
       orderBy: {
         id: 'desc'
       }
+    });
+    
+    console.log(`[getAllBillboards] Found ${billboards.length} billboards for ${user.role}`, {
+      userEmail: user.email,
+      count: billboards.length
     });
     
     res.json(billboards.map(toApiBillboard));
@@ -162,30 +163,51 @@ exports.getBillboardById = async (req, res) => {
 // Get approved billboards only (for client pages)
 exports.getApprovedBillboards = async (req, res) => {
   try {
-    let whereClause = { status: 'APPROVED' };
+    // Only return billboards that are APPROVED and AVAILABLE (not disabled)
+    let whereClause = { 
+      status: 'APPROVED',
+      available: true  // Only show billboards that are enabled/available
+    };
 
     // If user is authenticated, apply role-based filtering
     if (req.user) {
       const user = req.user;
       if (user.role === 'superadmin') {
-        whereClause = { status: 'APPROVED' };
+        whereClause = { 
+          status: 'APPROVED',
+          available: true
+        };
       } else if (user.role === 'publisher') {
-        whereClause = { userId: user.email, status: 'APPROVED' };
+        whereClause = { 
+          userId: user.email, 
+          status: 'APPROVED',
+          available: true
+        };
       } else if (user.role === 'user') {
-        whereClause = { userId: user.email, status: 'APPROVED' };
+        whereClause = { 
+          userId: user.email, 
+          status: 'APPROVED',
+          available: true
+        };
       } else {
-        whereClause = { userId: user.email, status: 'APPROVED' };
+        whereClause = { 
+          userId: user.email, 
+          status: 'APPROVED',
+          available: true
+        };
       }
     }
-    // If not authenticated, just return all approved billboards
+    // If not authenticated, just return all approved and available billboards
 
     const billboards = await prisma.billboard.findMany({
       where: whereClause,
       orderBy: { id: 'desc' }
     });
 
+    logger.billboard('Approved and available billboards fetched', billboards.length, 'billboards');
     res.json(billboards.map(toApiBillboard));
   } catch (err) {
+    logger.error('Error fetching approved billboards:', err);
     res.status(500).send('Server Error');
   }
 };

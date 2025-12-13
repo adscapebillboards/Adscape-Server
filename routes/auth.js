@@ -8,8 +8,15 @@ const cloudinary = require('./../config/cloudinary'); // path to your cloudinary
 const multer = require('multer');
 const { OAuth2Client } = require('google-auth-library');
 const JWT_SECRET = process.env.JWT_SECRET;
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+let GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+// Trim whitespace and remove quotes if present
+if (GOOGLE_CLIENT_ID) {
+  GOOGLE_CLIENT_ID = GOOGLE_CLIENT_ID.trim().replace(/^["']|["']$/g, '');
+}
 const upload = multer({ storage: multer.memoryStorage() });
+
+// Debug: Log client ID to verify it's loaded correctly
+console.log('🔑 Google Client ID loaded:', GOOGLE_CLIENT_ID ? `${GOOGLE_CLIENT_ID.substring(0, 20)}...` : 'NOT SET');
 
 // Initialize Google OAuth client
 const client = new OAuth2Client(GOOGLE_CLIENT_ID);
@@ -17,6 +24,19 @@ const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 // Verify Google OAuth token
 async function verifyGoogleToken(token) {
   try {
+    // Decode token to see audience without verification (for debugging)
+    try {
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+        console.log('🔍 Token audience:', payload.aud);
+        console.log('🔍 Expected audience:', GOOGLE_CLIENT_ID);
+        console.log('🔍 Match:', payload.aud === GOOGLE_CLIENT_ID);
+      }
+    } catch (decodeError) {
+      console.log('Could not decode token for debugging');
+    }
+
     const ticket = await client.verifyIdToken({
       idToken: token,
       audience: GOOGLE_CLIENT_ID,
@@ -31,6 +51,11 @@ async function verifyGoogleToken(token) {
     };
   } catch (error) {
     console.error('Google token verification failed:', error);
+    console.error('Error details:', {
+      message: error.message,
+      expectedClientId: GOOGLE_CLIENT_ID,
+      errorName: error.name
+    });
     throw new Error('Invalid Google token');
   }
 }
