@@ -87,6 +87,8 @@ const allowedOrigins = new Set([
 
 
 
+// CORS configuration - permissive for development
+// Allow all headers to avoid CORS issues with browser-sent headers
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, curl, file:// like Electron)
@@ -95,8 +97,33 @@ app.use(cors({
     return callback(null, false);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+  // Don't restrict headers - allow all headers sent by browser
+  // This prevents CORS errors from browser-added headers like cache-control, pragma, expires, etc.
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Accept-Language',
+    'Accept-Encoding',
+    'Origin',
+    'Referer',
+    'User-Agent',
+    'Cache-Control',
+    'Pragma',
+    'Expires',
+    'If-Modified-Since',
+    'If-None-Match',
+    'If-Range',
+    'Range',
+    'X-CSRF-Token',
+    'ngrok-skip-browser-warning',
+    'Last-Modified',
+    'ETag',
+    'Date'
+  ],
+  exposedHeaders: ['Content-Length', 'Content-Type', 'Authorization'],
   preflightContinue: false,
   optionsSuccessStatus: 200
 }));
@@ -204,12 +231,14 @@ app.use('/api', metricsRoutes);
 app.use('/api', businessRoutes);
 
 // Modularized API routes
+// Register campaignApiRoutes BEFORE basicApiRoutes to ensure proper status update handling
+// campaignApiRoutes has the correct PAYMENT_COMPLETED -> SCHEDULED logic
+app.use('/api', campaignApiRoutes);
 app.use('/api', basicApiRoutes);
 app.use('/api', userBillboardRoutes);
 app.use('/api', adminUserRoutes);
 // Public, non-auth billboard endpoints
 app.use('/api/public', billboardListRoutes);
-app.use('/api', campaignApiRoutes);
 app.use('/api', contactEmailRoutes);
 
 // Email and GST routes
@@ -630,17 +659,8 @@ app.mountBMIFlowRoutes = (io) => {
   logger.info('[BMI-MOUNT] ✅ BMI routes successfully mounted before error/404 handlers');
 };
 
-// Handle OPTIONS preflight requests before error handlers
-app.options('*', (req, res) => {
-  const origin = req.headers.origin;
-  if (allowedOrigins.has(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    res.header('Access-Control-Allow-Credentials', 'true');
-  }
-  res.status(200).end();
-});
+// Note: OPTIONS requests are handled by cors middleware above
+// This manual handler is removed to avoid conflicts
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -654,15 +674,8 @@ app.use((err, req, res, next) => {
 
 // 404 handler (must be last)
 app.use('*', (req, res) => {
-  // Don't send 404 for OPTIONS requests
+  // Don't send 404 for OPTIONS requests (handled by cors middleware)
   if (req.method === 'OPTIONS') {
-    const origin = req.headers.origin;
-    if (allowedOrigins.has(origin)) {
-      res.header('Access-Control-Allow-Origin', origin);
-      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-      res.header('Access-Control-Allow-Credentials', 'true');
-    }
     return res.status(200).end();
   }
   logger.warn('Route not found:', req.originalUrl);

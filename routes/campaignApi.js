@@ -14,7 +14,8 @@ const {
   updateBillboardStatus,
   getCampaignWithBillboardStatuses,
   deleteCampaign,
-  deleteBillboardFromCampaign
+  deleteBillboardFromCampaign,
+  completePayment
 } = require('../controllers/campaignApiController');
 
 // Campaign creation with file upload
@@ -28,6 +29,9 @@ router.get('/campaignsu', getAllCampaigns);
 
 // Get campaigns by user email (for billboard owners)
 router.get('/campaignsuz', getCampaignsByUserEmail);
+
+// Complete payment for a campaign (dedicated endpoint)
+router.post('/campaigns/:id/complete-payment', completePayment);
 
 // Update campaign status
 router.put('/campaigns/:id/status', updateCampaignStatus);

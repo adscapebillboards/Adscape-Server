@@ -62,7 +62,8 @@ const updateCampaignStatusByDate = async (campaignId) => {
     
     if (!canSchedule) {
       // Campaign hasn't been approved or payment isn't completed, don't change status
-      logger.info(`Campaign ${campaignId} is in ${campaign.status} status. Skipping date-based status update.`);
+      logger.info(`⏭️ Campaign ${campaignId} is in ${campaign.status} status. Skipping date-based status update.`);
+      logger.info(`ℹ️ Campaign must be in PAYMENT_COMPLETED, SCHEDULED, LIVE, or COMPLETED status to be updated by date.`);
       return {
         campaign,
         updatedBillboards: [],

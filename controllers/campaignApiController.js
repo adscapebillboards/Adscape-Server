@@ -454,6 +454,12 @@ const getCampaignsByUser = async (req, res) => {
     
     logger.campaign('Campaigns fetched', `User: ${userIdentifier}, Count: ${campaigns.length}`);
     logger.info('Matched campaigns by:', whereConditions);
+    
+    // Log campaign statuses for debugging
+    campaigns.forEach(c => {
+      logger.info(`Campaign ${c.id}: status = ${c.status}, name = ${c.campaignName}`);
+    });
+    
     res.json(campaigns);
   } catch (err) {
     logger.error('Error fetching campaigns:', err);
@@ -543,6 +549,14 @@ const updateCampaignStatus = async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
+  logger.info('=== CAMPAIGN STATUS UPDATE REQUEST ===');
+  logger.info(`Campaign ID: ${id}`);
+  logger.info(`Requested Status: ${status}`);
+  logger.info(`Request Method: ${req.method}`);
+  logger.info(`Request URL: ${req.originalUrl}`);
+  logger.info(`Request Body:`, req.body);
+  logger.info('=======================================');
+
   try {
     // Get current campaign to check dates
     const currentCampaign = await prisma.campaign.findUnique({
@@ -550,10 +564,20 @@ const updateCampaignStatus = async (req, res) => {
     });
 
     if (!currentCampaign) {
+      logger.error(`Campaign ${id} not found`);
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
+    logger.info(`Current campaign status in DB: ${currentCampaign.status}`);
+    logger.info(`Requested status: ${status}`);
+    
     let newStatus = status.toUpperCase();
+    logger.info(`Normalized status: ${newStatus}`);
+    
+    // Log if we're trying to update from APPROVED to PAYMENT_COMPLETED
+    if (currentCampaign.status?.toUpperCase() === 'APPROVED' && newStatus === 'PAYMENT_COMPLETED') {
+      logger.info(`🔄 Updating campaign from APPROVED to PAYMENT_COMPLETED`);
+    }
     
     // Prevent skipping payment step - campaigns must be PAYMENT_COMPLETED before SCHEDULED
     if (newStatus === 'SCHEDULED' || newStatus === 'LIVE') {
@@ -570,6 +594,8 @@ const updateCampaignStatus = async (req, res) => {
     
     // If setting to PAYMENT_COMPLETED, generate slots and schedule
     if (newStatus === 'PAYMENT_COMPLETED') {
+      logger.info(`💰 PAYMENT_COMPLETED status detected for campaign ${id}`);
+      logger.info(`📅 Current campaign startDate: ${currentCampaign.startDate}`);
       logger.campaign('Payment completed, generating slots and scheduling', `Campaign ID: ${id}`);
 
       try {
@@ -626,18 +652,41 @@ const updateCampaignStatus = async (req, res) => {
           }
 
           // Now check if we should auto-schedule based on start date
-          const now = new Date();
-          const startDate = new Date(campaignWithBillboards.startDate);
+          // This should always run regardless of billboard parsing success
+          let startDateToCheck = campaignWithBillboards.startDate || (currentCampaign && currentCampaign.startDate);
           
-          // If start date hasn't arrived, set to SCHEDULED
-          if (now < startDate) {
-            newStatus = 'SCHEDULED';
-            logger.info(`Campaign ${id} payment completed. Auto-scheduling (start date: ${startDate.toISOString()}, now: ${now.toISOString()})`);
+          logger.info(`Campaign ${id} date check:`, {
+            hasStartDate: !!startDateToCheck,
+            startDate: startDateToCheck,
+            currentCampaignStartDate: currentCampaign?.startDate
+          });
+          
+          if (startDateToCheck) {
+            const now = new Date();
+            const startDate = new Date(startDateToCheck);
+            
+            // Validate the date
+            if (!isNaN(startDate.getTime())) {
+              // If start date hasn't arrived, set to SCHEDULED
+              if (now < startDate) {
+                newStatus = 'SCHEDULED';
+                logger.info(`✅ Campaign ${id} payment completed. Auto-scheduling (start date: ${startDate.toISOString()}, now: ${now.toISOString()})`);
+              } else {
+                // Start date has passed, set to LIVE
+                newStatus = 'LIVE';
+                logger.info(`✅ Campaign ${id} payment completed. Auto-activating (start date already passed: ${startDate.toISOString()}, now: ${now.toISOString()})`);
+              }
+            } else {
+              logger.warn(`⚠️ Campaign ${id} has invalid start date: ${startDateToCheck}. Defaulting to SCHEDULED.`);
+              newStatus = 'SCHEDULED'; // Default to SCHEDULED for future campaigns
+            }
           } else {
-            // Start date has passed, set to LIVE
-            newStatus = 'LIVE';
-            logger.info(`Campaign ${id} payment completed. Auto-activating (start date already passed: ${startDate.toISOString()}, now: ${now.toISOString()})`);
+            // No start date found - default to SCHEDULED (campaigns typically start in the future)
+            logger.warn(`⚠️ Campaign ${id} has no start date. Defaulting to SCHEDULED.`);
+            newStatus = 'SCHEDULED';
           }
+          
+          logger.info(`📝 Campaign ${id} final status will be: ${newStatus}`);
         }
       } catch (slotError) {
         logger.error('Error generating slots after payment:', slotError);
@@ -648,29 +697,240 @@ const updateCampaignStatus = async (req, res) => {
             select: { startDate: true }
           });
           
-          if (campaignForDate) {
+          if (campaignForDate && campaignForDate.startDate) {
             const now = new Date();
             const startDate = new Date(campaignForDate.startDate);
-            newStatus = now < startDate ? 'SCHEDULED' : 'LIVE';
-            logger.info(`Campaign ${id} status set to ${newStatus} after slot generation error`);
+            
+            if (!isNaN(startDate.getTime())) {
+              newStatus = now < startDate ? 'SCHEDULED' : 'LIVE';
+              logger.info(`Campaign ${id} status set to ${newStatus} after slot generation error (start date: ${startDate.toISOString()})`);
+            } else {
+              logger.warn(`Campaign ${id} has invalid start date after error. Defaulting to SCHEDULED.`);
+              newStatus = 'SCHEDULED';
+            }
+          } else {
+            // No start date found - default to SCHEDULED
+            logger.warn(`Campaign ${id} has no start date after error. Defaulting to SCHEDULED.`);
+            newStatus = 'SCHEDULED';
           }
         } catch (dateError) {
           logger.error('Error checking start date:', dateError);
-          // Keep status as PAYMENT_COMPLETED if we can't determine schedule
+          // Default to SCHEDULED if we can't determine schedule (safer than leaving as PAYMENT_COMPLETED)
+          newStatus = 'SCHEDULED';
+          logger.info(`Campaign ${id} status defaulted to SCHEDULED due to date check error`);
         }
       }
     }
 
+    logger.info(`📝 About to update campaign ${id} to status: ${newStatus}`);
+    logger.info(`📊 Current status before update: ${currentCampaign.status}`);
+    logger.info(`📊 Requested status: ${status}`);
+    logger.info(`📊 Normalized status: ${newStatus}`);
+    
+    // Perform the database update
     const campaign = await prisma.campaign.update({
       where: { id },
       data: { status: newStatus }
     });
+    
+    logger.info(`✅ Database update completed. Campaign status set to: ${campaign.status}`);
 
+    // Verify the update actually happened by querying again
+    const verifyCampaign = await prisma.campaign.findUnique({
+      where: { id },
+      select: { id: true, status: true, campaignName: true, startDate: true, endDate: true }
+    });
+    
     logger.campaign('Campaign status updated', `Campaign ID: ${id}, Status: ${newStatus} (requested: ${status})`);
-    res.json({ message: 'Status updated', campaign });
+    logger.info('=== CAMPAIGN STATUS UPDATE RESPONSE ===');
+    logger.info(`Campaign ID: ${id}`);
+    logger.info(`Requested Status: ${status}`);
+    logger.info(`Normalized Status: ${newStatus}`);
+    logger.info(`Campaign Status in DB (from update result): ${campaign.status}`);
+    logger.info(`Campaign Status in DB (verified query): ${verifyCampaign?.status}`);
+    logger.info(`Status match: ${campaign.status === verifyCampaign?.status ? '✅ YES' : '❌ NO - MISMATCH!'}`);
+    if (campaign.status !== verifyCampaign?.status) {
+      logger.error(`❌ CRITICAL: Status mismatch! Update returned ${campaign.status} but verification query returned ${verifyCampaign?.status}`);
+    }
+    logger.info(`Campaign Start Date: ${verifyCampaign?.startDate}`);
+    logger.info('========================================');
+    
+    res.json({ 
+      success: true,
+      message: 'Campaign status updated successfully', 
+      data: {
+        id: campaign.id,
+        status: campaign.status,
+        verifiedStatus: verifyCampaign?.status,
+        campaignName: campaign.campaignName,
+        startDate: campaign.startDate,
+        endDate: campaign.endDate
+      },
+      campaign 
+    });
   } catch (err) {
     logger.error('Error updating status:', err);
     res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// Complete payment for a campaign - dedicated endpoint
+const completePayment = async (req, res) => {
+  const { id } = req.params;
+
+  logger.info('=== PAYMENT COMPLETION REQUEST ===');
+  logger.info(`Campaign ID: ${id}`);
+  logger.info(`Request Method: ${req.method}`);
+  logger.info(`Request URL: ${req.originalUrl}`);
+  logger.info('===================================');
+
+  try {
+    // Get current campaign
+    const currentCampaign = await prisma.campaign.findUnique({
+      where: { id }
+    });
+
+    if (!currentCampaign) {
+      logger.error(`Campaign ${id} not found for payment completion`);
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    logger.info(`Current campaign status: ${currentCampaign.status}`);
+    logger.info(`Campaign start date: ${currentCampaign.startDate}`);
+
+    // Validate that campaign is in a state that allows payment
+    const currentStatus = currentCampaign.status?.toUpperCase();
+    if (currentStatus !== 'APPROVED' && currentStatus !== 'PAYMENT_PENDING') {
+      logger.warn(`Campaign ${id} cannot complete payment. Current status: ${currentStatus}`);
+      return res.status(400).json({ 
+        error: 'Invalid campaign status for payment',
+        message: `Campaign must be APPROVED or PAYMENT_PENDING to complete payment. Current status: ${currentCampaign.status}`,
+        currentStatus: currentCampaign.status
+      });
+    }
+
+    // Fetch campaign with billboards for slot generation
+    const campaignWithBillboards = await prisma.campaign.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        billboards: true,
+        startDate: true,
+        endDate: true,
+        campaignName: true
+      }
+    });
+
+    if (!campaignWithBillboards) {
+      logger.error(`Campaign ${id} not found for slot generation`);
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    // Parse billboards
+    let parsedBillboards = campaignWithBillboards.billboards;
+    if (typeof parsedBillboards === 'string') {
+      try {
+        parsedBillboards = JSON.parse(parsedBillboards);
+      } catch (parseError) {
+        logger.error('Error parsing billboards JSON:', parseError);
+        return res.status(500).json({ error: 'Failed to parse campaign billboards' });
+      }
+    }
+
+    if (!Array.isArray(parsedBillboards) || parsedBillboards.length === 0) {
+      logger.error(`Campaign ${id} has no valid billboards`);
+      return res.status(400).json({ error: 'Campaign has no billboards' });
+    }
+
+    // Generate slots after payment completion
+    try {
+      const campaignWithParsedBillboards = {
+        ...campaignWithBillboards,
+        billboards: parsedBillboards
+      };
+      
+      logger.info(`Generating slots for campaign ${id}...`);
+      await generateSlots(campaignWithParsedBillboards);
+      logger.campaign('Slots generated successfully after payment', `Campaign ID: ${id}`);
+    } catch (slotGenError) {
+      logger.error('Error generating slots after payment:', slotGenError);
+      // Continue with status update even if slot generation fails
+    }
+
+    // Determine final status based on start date
+    let finalStatus = 'PAYMENT_COMPLETED';
+    let startDateToCheck = campaignWithBillboards.startDate || currentCampaign.startDate;
+    
+    logger.info(`Campaign ${id} date check:`, {
+      hasStartDate: !!startDateToCheck,
+      startDate: startDateToCheck
+    });
+    
+    if (startDateToCheck) {
+      const now = new Date();
+      const startDate = new Date(startDateToCheck);
+      
+      if (!isNaN(startDate.getTime())) {
+        if (now < startDate) {
+          finalStatus = 'SCHEDULED';
+          logger.info(`✅ Campaign ${id} payment completed. Auto-scheduling (start date: ${startDate.toISOString()}, now: ${now.toISOString()})`);
+        } else {
+          finalStatus = 'LIVE';
+          logger.info(`✅ Campaign ${id} payment completed. Auto-activating (start date already passed: ${startDate.toISOString()}, now: ${now.toISOString()})`);
+        }
+      } else {
+        logger.warn(`⚠️ Campaign ${id} has invalid start date: ${startDateToCheck}. Defaulting to SCHEDULED.`);
+        finalStatus = 'SCHEDULED';
+      }
+    } else {
+      logger.warn(`⚠️ Campaign ${id} has no start date. Defaulting to SCHEDULED.`);
+      finalStatus = 'SCHEDULED';
+    }
+    
+    logger.info(`📝 Campaign ${id} final status will be: ${finalStatus}`);
+
+    // Update campaign status
+    const updatedCampaign = await prisma.campaign.update({
+      where: { id },
+      data: { status: finalStatus }
+    });
+    
+    logger.info(`✅ Database update completed. Campaign status set to: ${updatedCampaign.status}`);
+
+    // Verify the update
+    const verifyCampaign = await prisma.campaign.findUnique({
+      where: { id },
+      select: { id: true, status: true, campaignName: true, startDate: true, endDate: true }
+    });
+    
+    logger.info('=== PAYMENT COMPLETION RESPONSE ===');
+    logger.info(`Campaign ID: ${id}`);
+    logger.info(`Final Status: ${finalStatus}`);
+    logger.info(`Campaign Status in DB: ${updatedCampaign.status}`);
+    logger.info(`Verified Status: ${verifyCampaign?.status}`);
+    logger.info(`Status match: ${updatedCampaign.status === verifyCampaign?.status ? '✅ YES' : '❌ NO'}`);
+    logger.info('====================================');
+    
+    res.json({ 
+      success: true,
+      message: 'Payment completed successfully. Campaign scheduled.',
+      data: {
+        id: updatedCampaign.id,
+        status: updatedCampaign.status,
+        verifiedStatus: verifyCampaign?.status,
+        campaignName: updatedCampaign.campaignName,
+        startDate: updatedCampaign.startDate,
+        endDate: updatedCampaign.endDate
+      },
+      campaign: updatedCampaign
+    });
+  } catch (err) {
+    logger.error('Error completing payment:', err);
+    logger.error('Error stack:', err.stack);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: err.message 
+    });
   }
 };
 
@@ -1551,5 +1811,6 @@ module.exports = {
   deleteCampaign,
   deleteBillboardFromCampaign,
   updateUserStatistics,
-  updateCampaignStatusBasedOnBillboards
+  updateCampaignStatusBasedOnBillboards,
+  completePayment
 }; 

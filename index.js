@@ -33,28 +33,8 @@ const io = new Server(server, {
   allowEIO3: true
 });
 
-// Add CORS to your app (HTTP API)
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // allow non-browser clients
-    const allowedOrigins = [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://127.0.0.1:3000", 
-      "http://127.0.0.1:5173",
-      "https://your-frontend-domain.com",
-       "https://adscape.co.in",
-       "https://admin.adscape.co.in",
-       "http://localhost:8080",
-         "http://127.0.0.1:5500",
-         "https://endearing-begonia-927b56.netlify.app",
-         "https://bmi-client.onrender.com"
-    ];
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("CORS not allowed for this origin"));
-  },
-  credentials: true
-}));
+// CORS is already configured in app-new.js
+// No need to add it again here as it would override the configuration
 
 // JSON parsing
 app.use(express.json());

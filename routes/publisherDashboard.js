@@ -21,69 +21,51 @@ router.get('/publisher-dashboard-stats', auth, async (req, res) => {
       return res.status(403).json({ error: 'Access denied. User not authenticated.' });
     }
     
-    // Check user role from JWT token first
-    const allowedRoles = ['publisher', 'admin'];
-    const userRole = (user.role || '').toLowerCase();
+    // Check if user exists in publisher table - if they do, they should have access
+    // This is the primary check since being in the publisher table means they're a publisher
     let publisherEmail = user.email;
-    let hasAccess = false;
+    let publisher = null;
     
-    // If user has publisher/admin role in JWT, allow access
-    if (allowedRoles.includes(userRole)) {
-      console.log('Publisher dashboard: Access granted based on JWT role', {
-        userEmail: user.email,
-        userRole: user.role
-      });
-      hasAccess = true;
-      
-      // Try to find publisher in database for email consistency, but don't require it
-      try {
-        const publisher = await prisma.publisher.findUnique({
-          where: { email: user.email },
-          select: { id: true, email: true, role: true, status: true }
-        });
-        
-        if (publisher) {
-          publisherEmail = publisher.email || user.email;
-        }
-      } catch (dbError) {
-        console.warn('Could not lookup publisher in database, using JWT email:', dbError);
-        // Continue with JWT email
-      }
-    } else {
-      // If role is not in JWT, check if user exists in publisher table
-      const publisher = await prisma.publisher.findUnique({
+    try {
+      publisher = await prisma.publisher.findUnique({
         where: { email: user.email },
         select: { id: true, email: true, role: true, status: true }
       });
+    } catch (dbError) {
+      console.error('Error looking up publisher in database:', dbError);
+      return res.status(500).json({ error: 'Database error while checking publisher access.' });
+    }
+    
+    // If user exists in publisher table, grant access (they are a publisher by definition)
+    if (publisher) {
+      console.log('Publisher dashboard: Access granted - user found in publisher table', {
+        userEmail: user.email,
+        publisherId: publisher.id,
+        publisherRole: publisher.role,
+        jwtRole: user.role
+      });
+      publisherEmail = publisher.email || user.email;
+    } else {
+      // If not in publisher table, check JWT role as fallback (for admin accounts that might access publisher dashboard)
+      const allowedRoles = ['publisher', 'admin'];
+      const userRole = (user.role || '').toLowerCase();
       
-      if (!publisher) {
-        console.log('Publisher dashboard: Access denied - not found in database and no valid role', {
+      if (allowedRoles.includes(userRole)) {
+        console.log('Publisher dashboard: Access granted based on JWT role (admin fallback)', {
           userEmail: user.email,
           userRole: user.role
         });
-        return res.status(403).json({ error: 'Access denied. Publisher account not found.' });
-      }
-      
-      const publisherRole = (publisher.role || '').toLowerCase();
-      if (!allowedRoles.includes(publisherRole)) {
-        console.log('Publisher dashboard: Access denied - invalid role', {
+        // Continue with JWT email
+      } else {
+        console.log('Publisher dashboard: Access denied - not found in publisher table and no valid role', {
           userEmail: user.email,
-          userRole: user.role,
-          publisherRole: publisher.role
+          userRole: user.role
         });
         return res.status(403).json({ 
-          error: 'Access denied. Publisher or admin role required.',
-          userRole: user.role,
-          publisherRole: publisher.role
+          error: 'Access denied. Publisher account not found or insufficient permissions.',
+          userRole: user.role
         });
       }
-      
-      hasAccess = true;
-      publisherEmail = publisher.email || user.email;
-    }
-    
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'Access denied. Insufficient permissions.' });
     }
     
     // Get publisher's billboards (all statuses for stats calculation)

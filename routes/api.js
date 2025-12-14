@@ -221,35 +221,9 @@ router.get('/campaignsuz', async (req, res) => {
   }
 });
 
-// Update campaign status
-router.put('/campaigns/:id/status', async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
-
-  try {
-    const result = await pool.query(
-      'UPDATE campaigns SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
-      [status, id]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Campaign not found' });
-    }
-
-    const updatedCampaign = result.rows[0];
-
-    if (status === 'approved') {
-      // Generate slots function would be called here
-      logger.campaign('Campaign approved, generating slots', `Campaign ID: ${id}`);
-    }
-
-    logger.campaign('Campaign status updated', `Campaign ID: ${id}, Status: ${status}`);
-    res.json({ message: 'Status updated', campaign: updatedCampaign });
-  } catch (err) {
-    logger.error('Error updating status:', err);
-    res.status(500).json({ error: 'Internal server error.' });
-  }
-});
+// Update campaign status - REMOVED: This route is now handled by campaignApi.js
+// The proper implementation with PAYMENT_COMPLETED -> SCHEDULED logic is in campaignApiController.js
+// router.put('/campaigns/:id/status', ...) - MOVED TO campaignApi.js
 
 // Update campaign name
 router.put('/update-campaign-name', async (req, res) => {
