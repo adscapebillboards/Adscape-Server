@@ -17,4 +17,7 @@ router.put('/adscape/player/:screenId/flow-type', adscapeController.updateFlowTy
 // Delete a player
 router.delete('/adscape/player/:screenId', adscapeController.deletePlayer);
 
+// Check if screen ID is assigned to a billboard
+router.get('/adscape/check-assignment/:screenId', adscapeController.checkScreenAssignment);
+
 module.exports = router;

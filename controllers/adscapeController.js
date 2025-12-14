@@ -177,3 +177,54 @@ exports.deletePlayer = async (req, res) => {
         res.status(500).json({ error: 'Failed to delete player' });
     }
 };
+
+/**
+ * Check if screen ID is assigned to a billboard
+ * GET /api/adscape/check-assignment/:screenId
+ */
+exports.checkScreenAssignment = async (req, res) => {
+    try {
+        const { screenId } = req.params;
+        
+        logger.info('[ADSCAPE] Checking assignment for screenId:', screenId);
+        
+        // Check if any billboard has this screen_id
+        const billboard = await prisma.billboard.findFirst({
+            where: {
+                screen_id: String(screenId)
+            },
+            select: {
+                id: true,
+                name: true,
+                screen_id: true,
+                status: true,
+                available: true
+            }
+        });
+        
+        if (billboard) {
+            logger.info('[ADSCAPE] Screen ID assigned to billboard:', billboard.id);
+            return res.json({
+                assigned: true,
+                billboard: {
+                    id: billboard.id,
+                    name: billboard.name,
+                    status: billboard.status,
+                    available: billboard.available
+                }
+            });
+        }
+        
+        logger.info('[ADSCAPE] Screen ID not assigned to any billboard');
+        return res.json({
+            assigned: false,
+            billboard: null
+        });
+    } catch (error) {
+        logger.error('[ADSCAPE] Check assignment error:', error);
+        return res.status(500).json({ 
+            assigned: false,
+            error: 'Failed to check assignment' 
+        });
+    }
+};

@@ -583,7 +583,16 @@ const updateCampaignStatus = async (req, res) => {
           }
         });
 
-        if (campaignWithBillboards) {
+        if (!campaignWithBillboards) {
+          logger.error('Campaign not found for slot generation', `Campaign ID: ${id}`);
+          // Still try to update status based on start date from currentCampaign
+          if (currentCampaign && currentCampaign.startDate) {
+            const now = new Date();
+            const startDate = new Date(currentCampaign.startDate);
+            newStatus = now < startDate ? 'SCHEDULED' : 'LIVE';
+            logger.info(`Campaign ${id} status set to ${newStatus} (campaign not found in billboards query)`);
+          }
+        } else {
           // Parse the billboards JSON field if it's a string
           let parsedBillboards = campaignWithBillboards.billboards;
           if (typeof parsedBillboards === 'string') {
@@ -591,19 +600,30 @@ const updateCampaignStatus = async (req, res) => {
               parsedBillboards = JSON.parse(parsedBillboards);
             } catch (parseError) {
               logger.error('Error parsing billboards JSON:', parseError);
-              return;
+              // Still try to update status based on date even if parsing fails
+              const now = new Date();
+              const startDate = new Date(campaignWithBillboards.startDate);
+              newStatus = now < startDate ? 'SCHEDULED' : 'LIVE';
+              logger.info(`Campaign ${id} status set to ${newStatus} (billboard parsing failed)`);
             }
           }
 
-          // Create a new object with parsed billboards
-          const campaignWithParsedBillboards = {
-            ...campaignWithBillboards,
-            billboards: parsedBillboards
-          };
+          if (parsedBillboards && Array.isArray(parsedBillboards)) {
+            // Create a new object with parsed billboards
+            const campaignWithParsedBillboards = {
+              ...campaignWithBillboards,
+              billboards: parsedBillboards
+            };
 
-          // Generate slots after payment completion
-          await generateSlots(campaignWithParsedBillboards);
-          logger.campaign('Slots generated successfully after payment', `Campaign ID: ${id}`);
+            // Generate slots after payment completion
+            try {
+              await generateSlots(campaignWithParsedBillboards);
+              logger.campaign('Slots generated successfully after payment', `Campaign ID: ${id}`);
+            } catch (slotGenError) {
+              logger.error('Error in generateSlots:', slotGenError);
+              // Continue to set status based on date even if slot generation fails
+            }
+          }
 
           // Now check if we should auto-schedule based on start date
           const now = new Date();
@@ -612,18 +632,32 @@ const updateCampaignStatus = async (req, res) => {
           // If start date hasn't arrived, set to SCHEDULED
           if (now < startDate) {
             newStatus = 'SCHEDULED';
-            logger.info(`Campaign ${id} payment completed. Auto-scheduling (start date: ${startDate})`);
+            logger.info(`Campaign ${id} payment completed. Auto-scheduling (start date: ${startDate.toISOString()}, now: ${now.toISOString()})`);
           } else {
             // Start date has passed, set to LIVE
             newStatus = 'LIVE';
-            logger.info(`Campaign ${id} payment completed. Auto-activating (start date already passed)`);
+            logger.info(`Campaign ${id} payment completed. Auto-activating (start date already passed: ${startDate.toISOString()}, now: ${now.toISOString()})`);
           }
-        } else {
-          logger.error('Campaign not found for slot generation', `Campaign ID: ${id}`);
         }
       } catch (slotError) {
         logger.error('Error generating slots after payment:', slotError);
-        // Don't fail the status update if slot generation fails, but log it
+        // Even if slot generation fails, try to update status based on date
+        try {
+          const campaignForDate = await prisma.campaign.findUnique({
+            where: { id },
+            select: { startDate: true }
+          });
+          
+          if (campaignForDate) {
+            const now = new Date();
+            const startDate = new Date(campaignForDate.startDate);
+            newStatus = now < startDate ? 'SCHEDULED' : 'LIVE';
+            logger.info(`Campaign ${id} status set to ${newStatus} after slot generation error`);
+          }
+        } catch (dateError) {
+          logger.error('Error checking start date:', dateError);
+          // Keep status as PAYMENT_COMPLETED if we can't determine schedule
+        }
       }
     }
 
@@ -632,7 +666,7 @@ const updateCampaignStatus = async (req, res) => {
       data: { status: newStatus }
     });
 
-    logger.campaign('Campaign status updated', `Campaign ID: ${id}, Status: ${status}`);
+    logger.campaign('Campaign status updated', `Campaign ID: ${id}, Status: ${newStatus} (requested: ${status})`);
     res.json({ message: 'Status updated', campaign });
   } catch (err) {
     logger.error('Error updating status:', err);
