@@ -185,28 +185,68 @@ const trackAssetPlay = async (req, res) => {
     });
 
     // Update daily count using upsert
-    await prisma.assetPlay.upsert({
-      where: {
-        screenId_assetUrl_campaignId_playDate: {
+    // Handle null campaignId by using the appropriate unique constraint
+    if (campaign_id) {
+      // Use unique constraint with campaignId when it's not null
+      await prisma.assetPlay.upsert({
+        where: {
+          screenId_assetUrl_campaignId_playDate: {
+            screenId: screen_id,
+            assetUrl: asset_url,
+            campaignId: campaign_id,
+            playDate: new Date(playDate)
+          }
+        },
+        update: {
+          playCount: {
+            increment: 1
+          }
+        },
+        create: {
           screenId: screen_id,
           assetUrl: asset_url,
           campaignId: campaign_id,
+          playDate: new Date(playDate),
+          playCount: 1
+        }
+      });
+    } else {
+      // When campaignId is null, use the unique constraint without campaignId
+      // The constraint [screenId, assetUrl, playDate] allows only one record per day
+      // So we find any existing record for this day (regardless of campaignId)
+      const existing = await prisma.assetPlay.findFirst({
+        where: {
+          screenId: screen_id,
+          assetUrl: asset_url,
           playDate: new Date(playDate)
         }
-      },
-      update: {
-        playCount: {
-          increment: 1
-        }
-      },
-      create: {
-        screenId: screen_id,
-        assetUrl: asset_url,
-        campaignId: campaign_id,
-        playDate: new Date(playDate),
-        playCount: 1
+      });
+
+      if (existing) {
+        // Update existing record
+        await prisma.assetPlay.update({
+          where: {
+            id: existing.id
+          },
+          data: {
+            playCount: {
+              increment: 1
+            }
+          }
+        });
+      } else {
+        // Create new record with null campaignId
+        await prisma.assetPlay.create({
+          data: {
+            screenId: screen_id,
+            assetUrl: asset_url,
+            campaignId: null,
+            playDate: new Date(playDate),
+            playCount: 1
+          }
+        });
       }
-    });
+    }
 
     logger.asset('Play tracked', `Screen ${screen_id}, Asset: ${asset_url}`);
     console.info('[ASSETS] Play tracked', { screen_id, asset_url });
