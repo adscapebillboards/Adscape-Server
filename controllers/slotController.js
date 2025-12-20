@@ -138,6 +138,14 @@ const getAssetsByScreen = async (req, res) => {
       'sample:', JSON.stringify(sample)
     );
     console.info('[ASSETS] Sent', { screen_id, total: finalList.length, sample });
+    
+    // Log all asset remote URLs (clients will download these to local storage)
+    console.info(`[ASSETS] 📥 Asset remote URLs for screen ${screen_id} (${finalList.length} total) - Clients will download these to local storage:`);
+    finalList.forEach((asset, index) => {
+      console.info(`  [${index + 1}] Remote URL: ${asset.asset_url} (Slot: ${asset.slot_number}, Duration: ${asset.duration}s, Date: ${asset.play_date})`);
+    });
+    logger.info && logger.info(`📥 Asset remote URLs for screen ${screen_id}: ${finalList.map(a => a.asset_url).join(', ')}`);
+    console.info(`[ASSETS] 💡 Note: Clients should send 'local_file_path' in track-play requests to log where assets are stored locally`);
 
     res.json(finalList);
   } catch (err) {
@@ -149,11 +157,17 @@ const getAssetsByScreen = async (req, res) => {
 
 // Track asset play
 const trackAssetPlay = async (req, res) => {
-  const { screen_id, asset_url, played_at } = req.body;
+  const { screen_id, asset_url, played_at, local_file_path } = req.body;
 
   try {
     const timestamp = played_at ? new Date(played_at) : new Date();
     const playDate = timestamp.toISOString().split("T")[0];
+    
+    // Log local file path if provided
+    if (local_file_path) {
+      console.info(`[ASSETS] 💾 Asset downloaded to local storage: ${local_file_path} (Screen: ${screen_id}, Asset URL: ${asset_url})`);
+      logger.info && logger.info(`💾 Asset local storage path: ${local_file_path} (Screen: ${screen_id}, Asset: ${asset_url})`);
+    }
 
     // Fetch campaign_id from generated_slots
     const slot = await prisma.generatedSlot.findFirst({
@@ -249,7 +263,12 @@ const trackAssetPlay = async (req, res) => {
     }
 
     logger.asset('Play tracked', `Screen ${screen_id}, Asset: ${asset_url}`);
-    console.info('[ASSETS] Play tracked', { screen_id, asset_url });
+    console.info('[ASSETS] Play tracked', { screen_id, asset_url, local_file_path: local_file_path || 'N/A' });
+    console.info(`[ASSETS] 🎬 Asset play tracked - Remote URL: ${asset_url} (Screen: ${screen_id}, Timestamp: ${timestamp.toISOString()})`);
+    if (local_file_path) {
+      console.info(`[ASSETS] 💾 Local storage path: ${local_file_path}`);
+    }
+    logger.info && logger.info(`📥 Asset remote URL: ${asset_url}${local_file_path ? `, Local path: ${local_file_path}` : ''} (Screen: ${screen_id})`);
     res.sendStatus(200);
   } catch (err) {
     logger.error("DB error:", err);

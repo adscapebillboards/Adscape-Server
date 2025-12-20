@@ -128,6 +128,7 @@ router.get('/assets/:screenId', async (req, res) => {
     
     if (assets.length > 0) {
       logger.info(`✅ ASSETS FOUND: ${assets.length} assets available for screen ${screenId}`);
+      console.info(`[ASSETS] 📥 Asset download paths for screen ${screenId} (${assets.length} total):`);
       assets.forEach((asset, index) => {
         logger.info(`Asset ${index + 1}:`);
         logger.info(`  - URL: ${asset.asset_url}`);
@@ -139,10 +140,18 @@ router.get('/assets/:screenId', async (req, res) => {
           logger.info(`  - Expires At: ${asset.expires_at}`);
           logger.info(`  - Expires In: ${asset.expires_in_hours} hours`);
         }
+        // Log download path
+        console.info(`  [${index + 1}] 📥 Download Path: ${asset.asset_url} (Slot: ${asset.slot_number}, Type: ${asset.file_type}, Duration: ${asset.duration}s)`);
       });
+      // Log all remote URLs in a single line for easy tracking
+      const allPaths = assets.map(a => a.asset_url).join(', ');
+      logger.info(`📥 All asset remote URLs: ${allPaths}`);
+      console.info(`[ASSETS] 📥 All remote URLs: ${allPaths}`);
+      console.info(`[ASSETS] 💡 Note: Clients should send 'local_file_path' in track-play requests to log where assets are stored locally`);
     } else {
       logger.info(`❌ NO ASSETS FOUND: Screen ${screenId} has no assets assigned for ${targetDate}`);
       logger.info(`   This means the player will show a static image or default content`);
+      console.info(`[ASSETS] 📥 No asset download paths for screen ${screenId} on ${targetDate}`);
     }
     logger.info('==============================================');
 
@@ -194,7 +203,7 @@ function getFileType(url) {
 // Track asset play
 router.post('/track-play', async (req, res) => {
   try {
-    const { screen_id, asset_url, played_at } = req.body;
+    const { screen_id, asset_url, played_at, local_file_path } = req.body;
     const requestTime = new Date().toISOString();
     const clientIP = req.ip || req.connection.remoteAddress || 'Unknown';
 
@@ -204,10 +213,18 @@ router.post('/track-play', async (req, res) => {
     logger.info(`Screen ID: ${screen_id}`);
     logger.info(`Asset URL: ${asset_url}`);
     logger.info(`Played At: ${played_at}`);
+    if (local_file_path) {
+      logger.info(`Local File Path: ${local_file_path}`);
+    }
     logger.info(`Client IP: ${clientIP}`);
     logger.info(`Request Method: ${req.method}`);
     logger.info(`Request URL: ${req.originalUrl}`);
     logger.info('===================================');
+    console.info(`[ASSETS] 🎬 Asset play tracked - Remote URL: ${asset_url} (Screen: ${screen_id}, Time: ${played_at})`);
+    if (local_file_path) {
+      console.info(`[ASSETS] 💾 Asset downloaded to local storage: ${local_file_path}`);
+      logger.info(`💾 Local storage path: ${local_file_path}`);
+    }
 
     // Log the play to database
     await prisma.assetPlayLog.create({
