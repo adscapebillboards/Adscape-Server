@@ -54,15 +54,50 @@ const app = express();
 const http = require('http');
 const { Server } = require('socket.io');
 
-// create the HTTP server first
-const server = http.createServer(app);
+// Check if running in serverless environment (Vercel, AWS Lambda, etc.)
+const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY || process.env.GOOGLE_CLOUD_PROJECT);
 
-// then attach Socket.IO to it
-const io = new Server(server, {
-  cors: {
-    origin: '*'
-  }
-})
+// create the HTTP server first (only if not serverless)
+let server;
+let io;
+
+if (!isServerless) {
+  server = http.createServer(app);
+  
+  // then attach Socket.IO to it
+  io = new Server(server, {
+    cors: {
+      origin: '*',
+      methods: ['GET', 'POST'],
+      credentials: true
+    },
+    transports: ['websocket', 'polling'],
+    allowEIO3: true
+  });
+  
+  // Socket.IO connection handling
+  io.on('connection', (socket) => {
+    logger.info('Socket.IO client connected:', socket.id);
+    
+    socket.on('disconnect', () => {
+      logger.info('Socket.IO client disconnected:', socket.id);
+    });
+  });
+  
+  logger.info('Socket.IO server initialized');
+} else {
+  logger.info('Socket.IO disabled - running in serverless environment');
+  // Create a mock io object for compatibility
+  io = {
+    emit: () => { logger.warn('Socket.IO emit called but Socket.IO is disabled in serverless environment'); },
+    to: () => ({ emit: () => {} }),
+    sockets: { adapter: { rooms: new Map() }, sockets: new Map() },
+    engine: null // Mark as unavailable
+  };
+}
+
+// Make io available to other modules
+app.set('io', io);
 
 // Middleware
 app.use(express.json());
@@ -137,6 +172,37 @@ app.use((req, res, next) => {
 // Health check endpoint
 app.get('/ping', (req, res) => {
   res.status(200).send('pong');
+});
+
+// Socket.IO endpoint handler - handle requests gracefully
+// Note: Socket.IO requires persistent connections, which don't work in serverless environments
+app.use('/socket.io/', (req, res, next) => {
+  const ioInstance = app.get('io');
+  // If Socket.IO is not available (serverless), return helpful error instead of 400
+  if (!ioInstance || !ioInstance.engine) {
+    logger.warn('Socket.IO request received but Socket.IO is not available (serverless environment)');
+    return res.status(503).json({ 
+      error: 'Socket.IO is not available',
+      message: 'WebSocket connections require persistent connections. In serverless environments, please use HTTP polling or REST API endpoints.',
+      alternative: 'Use HTTP polling or REST API endpoints for real-time updates'
+    });
+  }
+  next();
+});
+
+// Socket.IO endpoint handler - handle requests gracefully
+// Note: Socket.IO requires persistent connections, which don't work in serverless environments
+app.use('/socket.io/', (req, res, next) => {
+  // If Socket.IO is not available (serverless), return helpful error
+  const io = app.get('io');
+  if (!io || !io.engine) {
+    return res.status(503).json({ 
+      error: 'Socket.IO is not available',
+      message: 'WebSocket connections require persistent connections. In serverless environments, please use HTTP polling or REST API endpoints.',
+      alternative: 'Use HTTP polling or REST API endpoints for real-time updates'
+    });
+  }
+  next();
 });
 
 // Scheduler control endpoints
