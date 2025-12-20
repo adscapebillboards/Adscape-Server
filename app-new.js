@@ -371,7 +371,7 @@ try {
 // Start the scheduler automatically when the app starts
 // You can disable this by setting DISABLE_AUTO_SCHEDULER=true in environment
 // Avoid auto-starting scheduler on serverless platforms (Vercel/AWS Lambda)
-const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY || process.env.GOOGLE_CLOUD_PROJECT);
+// Note: isServerless is already declared at the top of the file
 if (process.env.DISABLE_AUTO_SCHEDULER !== 'true' && !isServerless) {
   const intervalMinutes = parseInt(process.env.CAMPAIGN_STATUS_INTERVAL_MINUTES) || 15;
   logger.info(`Auto-starting campaign status scheduler with ${intervalMinutes} minute interval`);
