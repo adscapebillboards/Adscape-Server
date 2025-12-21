@@ -99,8 +99,7 @@ router.post('/google/signup', async (req, res) => {
       firstName: googleUser.name.split(' ')[0] || '',
       lastName: googleUser.name.split(' ').slice(1).join(' ') || '',
       email: googleUser.email,
-      phone: '', // Will be filled later
-      dateOfBirth: '' // Will be filled later
+      phone: '' // Will be filled later
     };
 
     const businessInfo = {
@@ -282,59 +281,97 @@ router.post('/oauth/complete-profile', async (req, res) => {
   }
 
   try {
-    // Check if publisher already exists
-    const existingPublisher = await prisma.publisher.findUnique({
-      where: { email: personalInfo.email }
+    // Check if publisher already exists by email or googleId
+    const existingPublisher = await prisma.publisher.findFirst({
+      where: {
+        OR: [
+          { email: personalInfo.email },
+          { googleId: oauthData.googleId }
+        ]
+      }
     });
 
     if (existingPublisher) {
-      return res.status(400).json({ error: 'Publisher already exists. Please sign in instead.' });
+      // If publisher exists, check if they're trying to complete profile again
+      if (existingPublisher.email === personalInfo.email && existingPublisher.googleId === oauthData.googleId) {
+        return res.status(400).json({ error: 'Publisher already exists. Please sign in instead.' });
+      }
+      // If email matches but googleId doesn't, or vice versa
+      return res.status(400).json({ error: 'An account with this email or Google account already exists. Please sign in instead.' });
     }
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(personalInfo.password, 10);
+    // Hash the password (only if provided - OAuth users may not have a password)
+    const hashedPassword = personalInfo.password 
+      ? await bcrypt.hash(personalInfo.password, 10)
+      : null;
 
     // Create new publisher with OAuth data
-    const publisher = await prisma.publisher.create({
-      data: {
-        name: `${personalInfo.firstName} ${personalInfo.lastName}`,
-        email: personalInfo.email,
-        phone: personalInfo.phone,
-        password: hashedPassword,
-        googleId: oauthData.googleId,
-        companyName: businessInfo.companyName,
-        businessType: businessInfo.businessType,
-        address: businessInfo.address,
-        city: businessInfo.city,
-        state: businessInfo.state,
-        pincode: businessInfo.pincode,
-        website: businessInfo.website,
-        businessInfo: {
-          dateOfBirth: personalInfo.dateOfBirth,
-          documents: documents
+    // Use upsert to handle potential race conditions
+    let publisher;
+    try {
+      publisher = await prisma.publisher.create({
+        data: {
+          name: `${personalInfo.firstName} ${personalInfo.lastName}`,
+          email: personalInfo.email,
+          phone: personalInfo.phone,
+          password: hashedPassword,
+          googleId: oauthData.googleId,
+          companyName: businessInfo.companyName,
+          businessType: businessInfo.businessType,
+          address: businessInfo.address,
+          city: businessInfo.city,
+          state: businessInfo.state,
+          pincode: businessInfo.pincode,
+          website: businessInfo.website,
+          businessInfo: {
+            documents: documents
+          },
+          joinDate: new Date(),
+          status: 'pending', // Set status as pending for approval
+          totalBillboards: 0,
+          revenue: '0',
+          role: 'publisher'
         },
-        joinDate: new Date(),
-        status: 'pending', // Set status as pending for approval
-        totalBillboards: 0,
-        revenue: '0',
-        role: 'publisher'
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        companyName: true,
-        businessType: true,
-        city: true,
-        state: true,
-        joinDate: true,
-        status: true,
-        totalBillboards: true,
-        revenue: true,
-        role: true
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          companyName: true,
+          businessType: true,
+          city: true,
+          state: true,
+          joinDate: true,
+          status: true,
+          totalBillboards: true,
+          revenue: true,
+          role: true
+        }
+      });
+    } catch (createError) {
+      // Handle unique constraint errors
+      if (createError.code === 'P2002') {
+        // Check again if publisher was created by another request (race condition)
+        const raceConditionCheck = await prisma.publisher.findFirst({
+          where: {
+            OR: [
+              { email: personalInfo.email },
+              { googleId: oauthData.googleId }
+            ]
+          }
+        });
+        
+        if (raceConditionCheck) {
+          return res.status(400).json({ error: 'Publisher already exists. Please sign in instead.' });
+        }
+        
+        // If it's an ID conflict, this is a database sequence issue
+        console.error('Database sequence issue - ID conflict:', createError);
+        return res.status(500).json({ error: 'Database error. Please try again or contact support.' });
       }
-    });
+      // Re-throw other errors
+      throw createError;
+    }
 
     // Create publisher metric entry
     await prisma.publisherMetric.create({
@@ -369,7 +406,41 @@ router.post('/oauth/complete-profile', async (req, res) => {
     });
   } catch (error) {
     console.error('OAuth Publisher Complete Profile Error:', error);
-    res.status(500).json({ error: 'Failed to complete publisher profile: ' + error.message });
+    
+    // Handle specific Prisma errors
+    if (error.code === 'P2002') {
+      const target = error.meta?.target || [];
+      if (target.includes('email')) {
+        return res.status(400).json({ error: 'An account with this email already exists. Please sign in instead.' });
+      }
+      if (target.includes('googleId')) {
+        return res.status(400).json({ error: 'This Google account is already registered. Please sign in instead.' });
+      }
+      if (target.includes('id')) {
+        // Database sequence issue - check if publisher was actually created
+        const checkPublisher = await prisma.publisher.findFirst({
+          where: {
+            OR: [
+              { email: personalInfo?.email },
+              { googleId: oauthData?.googleId }
+            ]
+          }
+        });
+        
+        if (checkPublisher) {
+          return res.status(400).json({ error: 'Publisher already exists. Please sign in instead.' });
+        }
+        
+        console.error('Database sequence sync issue detected. Publisher ID conflict.');
+        return res.status(500).json({ 
+          error: 'A database error occurred. Please try again in a moment. If the problem persists, contact support.' 
+        });
+      }
+    }
+    
+    // Handle other errors
+    const errorMessage = error.message || 'Unknown error occurred';
+    res.status(500).json({ error: `Failed to complete publisher profile: ${errorMessage}` });
   }
 });
 
