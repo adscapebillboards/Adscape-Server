@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const streamifier = require('streamifier');
 const cloudinary = require('../config/cloudinary');
 const prisma = require('../db/db');
 const auth = require('../middleware/auth');
@@ -12,23 +13,9 @@ const { createPublisherMetricEntry } = require('../controllers/publisherMetricCo
 const EmailService = require('../services/emailService');
 const router = express.Router();
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = 'uploads/registrations';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
+// Configure multer for file uploads - use memory storage for serverless compatibility
 const upload = multer({ 
-  storage: storage,
+  storage: multer.memoryStorage(), // Use memory storage instead of disk storage for serverless
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB limit
   },
@@ -45,13 +32,9 @@ const upload = multer({
   }
 });
 
-// Create registration (no auth required)
+// Create registration (no auth required) - only businessLicense is required
 router.post('/', upload.fields([
-  { name: 'documents[idProof]', maxCount: 1 },
-  { name: 'documents[addressProof]', maxCount: 1 },
-  { name: 'documents[businessLicense]', maxCount: 1 },
-  { name: 'documents[bankStatement]', maxCount: 1 },
-  { name: 'documents[gstCertificate]', maxCount: 1 }
+  { name: 'documents[businessLicense]', maxCount: 1 }
 ]), async (req, res) => {
   try {
     const { personalInfo, businessInfo, oauthData } = req.body;
@@ -64,24 +47,30 @@ router.post('/', upload.fields([
         const file = req.files[key][0];
         
         try {
-          // Upload to Cloudinary
-          const result = await cloudinary.uploader.upload(file.path, {
-            folder: 'billboard-registrations',
-            resource_type: 'auto',
-            transformation: [
-              { quality: 'auto:good' },
-              { fetch_format: 'auto' }
-            ]
+          // Upload to Cloudinary using streamifier (for memory storage)
+          const uploadPromise = new Promise((resolve, reject) => {
+            const uploadStream = cloudinary.uploader.upload_stream(
+              {
+                folder: 'billboard-registrations',
+                resource_type: 'auto',
+                transformation: [
+                  { quality: 'auto:good' },
+                  { fetch_format: 'auto' }
+                ]
+              },
+              (error, result) => {
+                if (error) reject(error);
+                else resolve(result);
+              }
+            );
+            streamifier.createReadStream(file.buffer).pipe(uploadStream);
           });
           
+          const result = await uploadPromise;
           documents[fieldName] = result.secure_url;
-          
-          // Delete local file after upload
-          fs.unlinkSync(file.path);
         } catch (uploadError) {
           console.error(`Error uploading ${fieldName} to Cloudinary:`, uploadError);
-          // Fallback to local storage if Cloudinary fails
-          documents[fieldName] = file.path;
+          throw new Error(`Failed to upload ${fieldName}: ${uploadError.message}`);
         }
       }
     }
@@ -97,7 +86,7 @@ router.post('/', upload.fields([
     const oauthDataObj = oauthData ? (typeof oauthData === 'string' ? JSON.parse(oauthData) : oauthData) : null;
 
     // Validate required personal info
-    const requiredPersonalFields = ['firstName', 'lastName', 'email', 'phone', 'dateOfBirth'];
+    const requiredPersonalFields = ['firstName', 'lastName', 'email', 'phone'];
     for (const field of requiredPersonalFields) {
       if (!personalInfoObj[field]) {
         return res.status(400).json({ error: `Missing required personal info: ${field}` });
@@ -112,12 +101,9 @@ router.post('/', upload.fields([
       }
     }
 
-    // Validate required documents
-    const requiredDocuments = ['idProof', 'addressProof', 'businessLicense', 'bankStatement'];
-    for (const doc of requiredDocuments) {
-      if (!documents[doc]) {
-        return res.status(400).json({ error: `Missing required document: ${doc}` });
-      }
+    // Validate required documents - only businessLicense is required
+    if (!documents.businessLicense) {
+      return res.status(400).json({ error: 'Missing required document: businessLicense' });
     }
 
     // Check if email already exists in registrations or users
@@ -293,8 +279,7 @@ router.put('/:id/approve', auth, async (req, res) => {
         businessInfo: {
           personalInfo: {
             firstName: personalInfo.firstName,
-            lastName: personalInfo.lastName,
-            dateOfBirth: personalInfo.dateOfBirth
+            lastName: personalInfo.lastName
           },
           businessInfo: businessInfo,
           documents: registration.documents,
