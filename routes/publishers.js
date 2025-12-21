@@ -9,7 +9,18 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+let GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+
+// Trim whitespace and remove quotes if present (same as auth.js)
+if (GOOGLE_CLIENT_ID) {
+  GOOGLE_CLIENT_ID = GOOGLE_CLIENT_ID.trim().replace(/^["']|["']$/g, '');
+}
+
+// Support multiple client IDs (web and mobile)
+const GOOGLE_CLIENT_IDS = [
+  GOOGLE_CLIENT_ID,
+  '566249475900-jpqs3cjm0n1ikj56mgocsgm6lm2161u5.apps.googleusercontent.com', // React Native app client ID
+].filter(Boolean);
 
 // Initialize Google OAuth client
 const client = new OAuth2Client(GOOGLE_CLIENT_ID);
@@ -17,11 +28,42 @@ const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 // Verify Google OAuth token
 async function verifyGoogleToken(token) {
   try {
-    const ticket = await client.verifyIdToken({
-      idToken: token,
-      audience: GOOGLE_CLIENT_ID,
-    });
-    const payload = ticket.getPayload();
+    // Try to verify with the primary client ID first
+    let ticket;
+    let payload;
+    
+    try {
+      ticket = await client.verifyIdToken({
+        idToken: token,
+        audience: GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload();
+    } catch (primaryError) {
+      // If primary fails, try with the React Native client ID
+      console.log('Primary client ID verification failed, trying alternative client IDs...');
+      
+      // Try each client ID in the list
+      for (const clientId of GOOGLE_CLIENT_IDS) {
+        try {
+          const altClient = new OAuth2Client(clientId);
+          ticket = await altClient.verifyIdToken({
+            idToken: token,
+            audience: clientId,
+          });
+          payload = ticket.getPayload();
+          console.log(`✅ Token verified with client ID: ${clientId.substring(0, 20)}...`);
+          break;
+        } catch (altError) {
+          // Continue to next client ID
+          continue;
+        }
+      }
+      
+      if (!payload) {
+        throw new Error('Token verification failed with all client IDs');
+      }
+    }
+    
     return {
       googleId: payload.sub,
       email: payload.email,
@@ -31,6 +73,7 @@ async function verifyGoogleToken(token) {
     };
   } catch (error) {
     console.error('Google token verification failed:', error);
+    console.error('Error details:', error.message);
     throw new Error('Invalid Google token');
   }
 }
