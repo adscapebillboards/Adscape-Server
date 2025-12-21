@@ -102,7 +102,10 @@ router.post('/create-campaign', upload.array('files'), async (req, res) => {
         // Campaign-related information for each billboard
         userName: userName,
         status: "PENDING",
-        createDate: new Date().toISOString(),
+        createDate: (() => {
+          const { getISTTimestamp } = require('../utils/timeUtils');
+          return getISTTimestamp();
+        })(),
         endDate: endDate,
         billboardCampaignId: `${campaignId}_${id}`, // Generate unique billboard campaign ID
         // Keep all existing billboard details

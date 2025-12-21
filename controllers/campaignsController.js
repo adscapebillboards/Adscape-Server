@@ -34,7 +34,10 @@ const createCampaign = async (req, res) => {
         // Campaign-related information for each billboard
         userName: user.email,
         status: "PENDING",
-        createDate: new Date().toISOString(),
+        createDate: (() => {
+          const { getISTTimestamp } = require('../utils/timeUtils');
+          return getISTTimestamp();
+        })(),
         endDate: billboard.endDate,
         billboardCampaignId: `${Date.now()}_${billboard.id}`, // Generate unique billboard campaign ID
         // Asset scheduling information

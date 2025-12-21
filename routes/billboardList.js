@@ -82,7 +82,10 @@ router.get('/billboards/:id', async (req, res) => {
 router.get('/billboards/search', async (req, res) => {
   try {
     const { city, q, limit = 20 } = req.query;
-    const where = {};
+    const where = {
+      status: 'APPROVED', // Only search approved billboards
+      available: true // Only available billboards
+    };
     if (city) where.city = { equals: String(city), mode: 'insensitive' };
     if (q) where.OR = [
       { name: { contains: String(q), mode: 'insensitive' } },

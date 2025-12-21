@@ -387,6 +387,47 @@ const authenticateToken = (req, res, next) => {
       res.status(500).json({ error: 'Failed to fetch user' });
     }
   });
+
+  // Update user profile
+  router.put('/me', authenticateToken, async (req, res) => {
+    try {
+      const updateData = {};
+      
+      // Only allow updating specific fields
+      if (req.body.phoneNumber !== undefined) {
+        updateData.phoneNumber = req.body.phoneNumber;
+      }
+      if (req.body.fullName !== undefined) {
+        updateData.fullName = req.body.fullName;
+      }
+      if (req.body.location !== undefined) {
+        // Handle location if needed
+        updateData.location = req.body.location;
+      }
+
+      const user = await prisma.user.update({
+        where: { id: req.user.id },
+        data: updateData,
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          phoneNumber: true,
+          joindate: true,
+          status: true,
+          totalbookings: true,
+          totalspent: true,
+          lastbooking: true
+        }
+      });
+      
+      console.log('User profile updated:', { id: user.id, phoneNumber: user.phoneNumber });
+      res.json({ user });
+    } catch (err) {
+      console.error('Update user error:', err);
+      res.status(500).json({ error: 'Failed to update user profile' });
+    }
+  });
   
 
   // Get all users

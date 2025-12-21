@@ -249,7 +249,10 @@ const streamUpload = (fileBuffer) => {
         // Campaign-related information for each billboard
         userName: userName,
         status: "PENDING",
-        createDate: new Date().toISOString(),
+        createDate: (() => {
+          const { getISTTimestamp } = require('../utils/timeUtils');
+          return getISTTimestamp();
+        })(),
         endDate: endDate,
         billboardCampaignId: `${campaignId}_${id}`, // Generate unique billboard campaign ID
         // Keep all existing billboard details from the original billboard object
@@ -292,6 +295,7 @@ const streamUpload = (fileBuffer) => {
     }
 
     try {
+      const { parseISTDate } = require('../utils/timeUtils');
       await prisma.campaign.create({
         data: {
           id: campaignId,
@@ -299,8 +303,8 @@ const streamUpload = (fileBuffer) => {
           campaignName: campaignName || "Auto Campaign",
           status: "PENDING",
           totalAmount,
-          startDate: new Date(startDate),
-          endDate: new Date(endDate),
+          startDate: parseISTDate(startDate),
+          endDate: parseISTDate(endDate),
           billboards: enrichedBillboards
         }
       });

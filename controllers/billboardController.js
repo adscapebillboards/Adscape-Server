@@ -275,44 +275,61 @@ exports.addBillboard = async (req, res) => {
 // Update
 exports.updateBillboard = async (req, res) => {
   const id = req.params.id;
-  const {
-    location, city, state, type, orientation, dailyViewership,
-    pricePerDay, available, size, images, latitude, longitude, maxAdvertiseDuration, adDuration
-  } = req.body;
+  
+  // Log what we're receiving for debugging
+  logger.billboard('Billboard update request', `ID: ${id}`, { 
+    receivedFields: Object.keys(req.body),
+    body: req.body 
+  });
 
   try {
+    // Build update data object - only include fields that are explicitly provided in the request
+    const updateData = {};
+    
+    // Only check fields that are actually in req.body (not destructured to avoid undefined issues)
+    if ('location' in req.body) updateData.location = req.body.location;
+    if ('city' in req.body) updateData.city = req.body.city;
+    if ('state' in req.body) updateData.state = req.body.state;
+    if ('type' in req.body) updateData.type = req.body.type;
+    if ('orientation' in req.body) updateData.orientation = req.body.orientation;
+    if ('dailyViewership' in req.body) updateData.dailyViewership = req.body.dailyViewership ? parseInt(req.body.dailyViewership) : null;
+    if ('pricePerDay' in req.body) updateData.pricePerDay = req.body.pricePerDay ? parseInt(req.body.pricePerDay) : null;
+    if ('available' in req.body) updateData.available = Boolean(req.body.available);
+    
     // Handle size object if provided
-    const width = size?.width || req.body.width;
-    const height = size?.height || req.body.height;
-    const unit = size?.unit || req.body.unit;
-    const category = size?.category || req.body.category;
+    if ('size' in req.body && req.body.size) {
+      if ('width' in req.body.size) updateData.width = req.body.size.width ? parseInt(req.body.size.width) : null;
+      if ('height' in req.body.size) updateData.height = req.body.size.height ? parseInt(req.body.size.height) : null;
+      if ('unit' in req.body.size) updateData.unit = req.body.size.unit;
+      if ('category' in req.body.size) updateData.category = req.body.size.category;
+    }
+    // Also check for direct width/height/unit/category in body
+    if ('width' in req.body) updateData.width = req.body.width ? parseInt(req.body.width) : null;
+    if ('height' in req.body) updateData.height = req.body.height ? parseInt(req.body.height) : null;
+    if ('unit' in req.body) updateData.unit = req.body.unit;
+    if ('category' in req.body) updateData.category = req.body.category;
+    
+    if ('images' in req.body) updateData.images = Array.isArray(req.body.images) ? req.body.images : [];
+    if ('latitude' in req.body) updateData.latitude = req.body.latitude ? parseFloat(req.body.latitude) : null;
+    if ('longitude' in req.body) updateData.longitude = req.body.longitude ? parseFloat(req.body.longitude) : null;
+    if ('adDuration' in req.body) updateData.adDuration = req.body.adDuration || null;
+    if ('maxAdvertiseDuration' in req.body) updateData.maxAdvertiseDuration = req.body.maxAdvertiseDuration ? parseInt(req.body.maxAdvertiseDuration) : null;
+
+    // Log what we're actually updating
+    logger.billboard('Billboard update data', `ID: ${id}`, { 
+      fieldsToUpdate: Object.keys(updateData),
+      updateData 
+    });
 
     await prisma.billboard.update({
       where: { id },
-      data: {
-        location,
-        city,
-        state,
-        type,
-        orientation,
-        dailyViewership: dailyViewership ? parseInt(dailyViewership) : null,
-        pricePerDay: pricePerDay ? parseInt(pricePerDay) : null,
-        available: available !== undefined ? Boolean(available) : true,
-        width: width ? parseInt(width) : null,
-        height: height ? parseInt(height) : null,
-        unit,
-        category,
-        images: Array.isArray(images) ? images : [],
-        latitude: latitude ? parseFloat(latitude) : null,
-        longitude: longitude ? parseFloat(longitude) : null,
-        adDuration: adDuration || null,
-        maxAdvertiseDuration: maxAdvertiseDuration ? parseInt(maxAdvertiseDuration) : null
-      }
+      data: updateData
     });
 
     res.send('✅ Billboard updated');
   } catch (err) {
     console.error('Update error:', err);
+    logger.error('Billboard update error', { id, error: err.message, stack: err.stack });
     res.status(500).send('Update Error');
   }
 };

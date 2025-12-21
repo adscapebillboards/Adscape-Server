@@ -50,7 +50,10 @@ const createCampaign = async (req, res) => {
         // Campaign-related information for each billboard
         userName: userName,
         status: "PENDING",
-        createDate: new Date().toISOString(),
+        createDate: (() => {
+          const { getISTTimestamp } = require('../utils/timeUtils');
+          return getISTTimestamp();
+        })(),
         endDate: endDate,
         billboardCampaignId: `${campaignId}_${id}`, // Generate unique billboard campaign ID
         // Keep all existing billboard details
@@ -68,6 +71,7 @@ const createCampaign = async (req, res) => {
     }, 0);
 
     // Create campaign using Prisma
+    const { parseISTDate } = require('../utils/timeUtils');
     const campaign = await prisma.campaign.create({
       data: {
         id: campaignId,
@@ -75,8 +79,8 @@ const createCampaign = async (req, res) => {
         campaignName: "Auto Campaign",
         status: "PENDING",
         totalAmount,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
+        startDate: parseISTDate(startDate),
+        endDate: parseISTDate(endDate),
         billboards: enrichedBillboards
       }
     });
