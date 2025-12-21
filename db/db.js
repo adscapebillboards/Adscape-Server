@@ -43,22 +43,42 @@ if (!globalForPrisma.prisma) {
   // Azure PostgreSQL connection configuration
   const isAzure = DATABASE_URL.includes('azure.com') || DATABASE_URL.includes('database.azure.com');
   
-  // Enhance DATABASE_URL for Azure with connection timeout and pool settings
+  // Enhance DATABASE_URL with connection timeout and pool settings
   let enhancedDatabaseUrl = DATABASE_URL;
+  const url = new URL(DATABASE_URL);
+  const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
+  
+  // Azure PostgreSQL specific settings
   if (isAzure) {
-    const url = new URL(DATABASE_URL);
-    // Add connection pool and timeout parameters for Azure
     url.searchParams.set('connect_timeout', '10');
-    url.searchParams.set('pool_timeout', '10');
     url.searchParams.set('statement_timeout', '30000');
     // Ensure SSL is properly configured
     if (!url.searchParams.has('sslmode')) {
       url.searchParams.set('sslmode', 'require');
     }
-    enhancedDatabaseUrl = url.toString();
     console.log('☁️  Azure PostgreSQL detected');
     console.log('⚠️  Make sure your IP is added to Azure firewall rules');
-    console.log('🔗 Enhanced connection URL with timeout settings');
+  }
+  
+  // Connection pool configuration - critical for serverless environments
+  // Limit connections to prevent pool exhaustion
+  const connectionLimit = isServerless 
+    ? parseInt(process.env.DATABASE_POOL_SIZE || '3', 10) // Lower limit for serverless
+    : parseInt(process.env.DATABASE_POOL_SIZE || '10', 10); // Higher limit for traditional servers
+  
+  const poolTimeout = parseInt(process.env.DATABASE_POOL_TIMEOUT || '10', 10);
+  
+  if (!url.searchParams.has('connection_limit')) {
+    url.searchParams.set('connection_limit', String(connectionLimit));
+  }
+  if (!url.searchParams.has('pool_timeout')) {
+    url.searchParams.set('pool_timeout', String(poolTimeout));
+  }
+  
+  enhancedDatabaseUrl = url.toString();
+  
+  if (isServerless) {
+    console.log('☁️  Serverless environment detected - connection pool limited to', connectionLimit);
   }
   
   globalForPrisma.prisma = new PrismaClient({

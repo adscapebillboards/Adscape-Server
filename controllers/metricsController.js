@@ -146,34 +146,42 @@ const getAdminDashboardStats = async (req, res) => {
       }
     });
 
-    // Get revenue data for charts (last 12 months)
+    // Get revenue data for charts (last 12 months) - optimized to use single query
     const revenueData = [];
     const currentDate = new Date();
+    const twelveMonthsAgo = new Date(currentDate.getFullYear(), currentDate.getMonth() - 11, 1);
     
+    // Fetch all campaigns from the last 12 months in a single query
+    const campaigns = await prisma.campaign.findMany({
+      where: {
+        createdAt: {
+          gte: twelveMonthsAgo
+        }
+      },
+      select: {
+        totalAmount: true,
+        createdAt: true
+      }
+    });
+    
+    // Group by month
+    const monthlyRevenue = {};
+    campaigns.forEach(campaign => {
+      const date = new Date(campaign.createdAt);
+      const monthKey = `${date.getFullYear()}-${date.getMonth()}`;
+      if (!monthlyRevenue[monthKey]) {
+        monthlyRevenue[monthKey] = 0;
+      }
+      monthlyRevenue[monthKey] += parseFloat(campaign.totalAmount || 0);
+    });
+    
+    // Build revenue data array for last 12 months
     for (let i = 11; i >= 0; i--) {
       const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
-      const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
-      const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-      
-      const monthCampaigns = await prisma.campaign.findMany({
-        where: {
-          createdAt: {
-            gte: monthStart,
-            lte: monthEnd
-          }
-        },
-        select: {
-          totalAmount: true
-        }
-      });
-      
-      const monthRevenue = monthCampaigns.reduce((sum, campaign) => {
-        return sum + (parseFloat(campaign.totalAmount || 0));
-      }, 0);
-      
+      const monthKey = `${date.getFullYear()}-${date.getMonth()}`;
       revenueData.push({
         month: date.toLocaleDateString('en-US', { month: 'short' }),
-        amount: monthRevenue
+        amount: monthlyRevenue[monthKey] || 0
       });
     }
 
