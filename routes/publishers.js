@@ -301,9 +301,10 @@ router.post('/oauth/complete-profile', async (req, res) => {
     }
 
     // Hash the password (only if provided - OAuth users may not have a password)
-    const hashedPassword = personalInfo.password 
+    // For OAuth users without password, use empty string (Prisma schema requires non-null String)
+    const hashedPassword = personalInfo.password && personalInfo.password.trim() !== ''
       ? await bcrypt.hash(personalInfo.password, 10)
-      : null;
+      : '';
 
     // Create new publisher with OAuth data
     // Use upsert to handle potential race conditions
