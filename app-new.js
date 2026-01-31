@@ -261,6 +261,23 @@ app.post('/api/scheduler/run', async (req, res) => {
   }
 });
 
+// DB status for frontend (safe - no credentials)
+app.get('/api/health/db', async (req, res) => {
+  try {
+    const url = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : null;
+    const host = url ? `${url.hostname}:${url.port}` : 'unknown';
+    const database = url ? url.pathname.replace(/^\//, '') || 'postgres' : 'unknown';
+    const start = Date.now();
+    await prisma.$queryRaw`SELECT 1`;
+    const latencyMs = Date.now() - start;
+    res.json({ status: 'connected', host, database, latencyMs });
+  } catch (err) {
+    const url = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : null;
+    const host = url ? `${url.hostname}:${url.port}` : 'unknown';
+    res.status(500).json({ status: 'error', host, error: err.message });
+  }
+});
+
 // Route organization by functionality
 
 // User and Authentication routes
