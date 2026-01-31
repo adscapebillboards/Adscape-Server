@@ -29,6 +29,24 @@ if (!globalForPrisma.prisma) {
     datasources: { db: { url: url.toString() } },
     log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
   });
+
+  // Log connection status periodically (skip in serverless - no long-running process)
+  const logInterval = parseInt(process.env.DB_STATUS_LOG_INTERVAL_MS || '5000', 10);
+  if (!isServerless && logInterval > 0) {
+    const safeUrl = `${url.protocol}//${url.hostname}:${url.port}${url.pathname}`;
+    const logStatus = async () => {
+      try {
+        const start = Date.now();
+        await globalForPrisma.prisma.$queryRaw`SELECT 1`;
+        const ms = Date.now() - start;
+        console.log(`🔗 [DB] ${safeUrl} | ✅ Connected | ${ms}ms`);
+      } catch (err) {
+        console.error(`🔗 [DB] ${safeUrl} | ❌ Error:`, err.message);
+      }
+    };
+    logStatus(); // immediate first log
+    setInterval(logStatus, logInterval);
+  }
 }
 
 module.exports = globalForPrisma.prisma;
