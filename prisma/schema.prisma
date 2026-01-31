@@ -95,6 +95,9 @@ model Billboard {
   resolution           String?   @db.VarChar(50)
   name                 String?   @default("NULL")
   autoBrightness       Boolean   @default(false) @map("auto_brightness")
+  boardFormat          String?   @map("board_format") @db.VarChar(50)
+  audioOutput          Boolean   @default(false) @map("audio_output")
+  video                String?   @db.VarChar(500)
   reason               String[]
   status               String?   @default("pending")
   screen_id            String?

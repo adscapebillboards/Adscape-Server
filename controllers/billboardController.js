@@ -218,7 +218,7 @@ exports.addBillboard = async (req, res) => {
   const {
     id, location, city, state, type, orientation, dailyViewership,
     pricePerDay, available, width, height, unit, category,
-    images, latitude, longitude, userId, adDuration,opening_time,closing_time, max_advertisers, maxAdvertiseDuration, auto_brightness, resolution, description,name,reasons
+    images, latitude, longitude, userId, adDuration,opening_time,closing_time, max_advertisers, maxAdvertiseDuration, auto_brightness, board_format, audio_output, video, resolution, description,name,reasons
   } = req.body;
 
   try {
@@ -251,6 +251,9 @@ exports.addBillboard = async (req, res) => {
         resolution,
         name,
         autoBrightness: auto_brightness !== undefined ? Boolean(auto_brightness) : false,
+        boardFormat: board_format || null,
+        audioOutput: audio_output !== undefined ? Boolean(audio_output) : false,
+        video: video || null,
         reason: Array.isArray(reasons) ? reasons : [],
         status: 'PENDING' // Set status as pending for approval
       }

@@ -62,7 +62,32 @@ exports.createPublisher = async (req, res) => {
   }
 
   try {
+    // Check if email already exists
+    const existingPublisher = await prisma.publisher.findUnique({
+      where: { email }
+    });
+
+    if (existingPublisher) {
+      return res.status(409).json({ error: 'A publisher with this email already exists' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10); // 10 salt rounds
+
+    // Validate and set joinDate - default to current date if not provided or invalid
+    let validJoinDate;
+    if (joinDate) {
+      const parsedDate = new Date(joinDate);
+      if (isNaN(parsedDate.getTime())) {
+        // Invalid date, use current date
+        logger.warn('Invalid joinDate provided, using current date:', joinDate);
+        validJoinDate = new Date();
+      } else {
+        validJoinDate = parsedDate;
+      }
+    } else {
+      // No joinDate provided, use current date
+      validJoinDate = new Date();
+    }
 
     const publisher = await prisma.publisher.create({
       data: {
@@ -70,7 +95,7 @@ exports.createPublisher = async (req, res) => {
         email,
         phone,
         location,
-        joinDate: new Date(joinDate),
+        joinDate: validJoinDate,
         password: hashedPassword
       }
     });
@@ -79,7 +104,7 @@ exports.createPublisher = async (req, res) => {
     try {
       await createPublisherMetricEntry(publisher.id, {
         totalBillboards: 0,
-        joinDate: new Date(joinDate),
+        joinDate: validJoinDate,
         status: 'active'
       });
       logger.info('PublisherMetric entry created automatically for publisher:', publisher.id);
@@ -92,6 +117,15 @@ exports.createPublisher = async (req, res) => {
     res.status(201).json({ message: 'Publisher created', publisher });
   } catch (err) {
     logger.error('Error creating publisher:', err);
+    
+    // Handle Prisma unique constraint errors
+    if (err.code === 'P2002') {
+      const field = err.meta?.target?.[0] || 'field';
+      return res.status(409).json({ 
+        error: `A publisher with this ${field} already exists` 
+      });
+    }
+    
     res.status(500).json({ error: 'Failed to create publisher' });
   }
 };
