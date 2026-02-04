@@ -1,6 +1,7 @@
 const prisma = require('./../db/db');
 const logger = require('../config/logger');
 const EmailService = require('../services/emailService');
+const pushNotificationService = require('../services/pushNotificationService');
 
 
 // Helper to normalize billboard status to uppercase in API responses
@@ -420,6 +421,14 @@ exports.approveBillboard = async (req, res) => {
     });
 
     logger.billboard('Billboard approved', `ID: ${id}, User: ${billboard.userId}`, { approvedBy: user.email });
+
+    // Browser push notification for admin
+    pushNotificationService.notifyAdmin(
+      'Billboard approved',
+      `${updatedBillboard.name || updatedBillboard.location || id} has been approved.`,
+      '/#/inventory'
+    ).catch((e) => logger.warn('Push notify failed after billboard approval:', e?.message));
+
     res.json({
       message: '✅ Billboard approved successfully',
       billboard: {
@@ -514,6 +523,13 @@ exports.rejectBillboard = async (req, res) => {
       rejectedBy: user.email, 
       reason: rejectionReason 
     });
+
+    // Browser push notification for admin
+    pushNotificationService.notifyAdmin(
+      'Billboard rejected',
+      `${updatedBillboard.name || updatedBillboard.location || id} was rejected.`,
+      '/#/inventory'
+    ).catch((e) => logger.warn('Push notify failed after billboard rejection:', e?.message));
     
     res.json({
       message: '❌ Billboard rejected successfully',

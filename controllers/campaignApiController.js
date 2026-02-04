@@ -23,6 +23,7 @@ const multer = require('multer');
 const cloudinary = require('../config/cloudinary');
 const { v4: uuidv4 } = require('uuid');
 const EmailService = require('../services/emailService');
+const pushNotificationService = require('../services/pushNotificationService');
 // const { generateSlots } = require('../utils/slotGenerator');
 
 const upload = multer({ 
@@ -371,6 +372,13 @@ const streamUpload = (fileBuffer) => {
     }
 
     logger.campaign('Campaign created successfully', `ID: ${campaignId}, User: ${userName}`);
+
+    // Browser push notification for admin
+    pushNotificationService.notifyAdmin(
+      'New campaign submitted',
+      `Campaign "${campaignName || 'Untitled'}" by ${userName} is waiting for approval.`,
+      '/#/bookings'
+    ).catch((e) => logger.warn('Push notify failed after campaign create:', e?.message));
     
     // Note: Emails will be sent after campaign name is updated
     // This prevents sending emails with "Auto Campaign" name
@@ -746,6 +754,21 @@ const updateCampaignStatus = async (req, res) => {
     });
     
     logger.campaign('Campaign status updated', `Campaign ID: ${id}, Status: ${newStatus} (requested: ${status})`);
+
+    // Browser push notification for admin on campaign approval/action
+    const pushTitles = {
+      APPROVED: 'Campaign approved',
+      REJECTED: 'Campaign rejected',
+      PAYMENT_PENDING: 'Campaign – payment pending',
+      PAYMENT_COMPLETED: 'Campaign – payment completed',
+      SCHEDULED: 'Campaign scheduled',
+      LIVE: 'Campaign live',
+      COMPLETED: 'Campaign completed'
+    };
+    const pushTitle = pushTitles[newStatus] || `Campaign status: ${newStatus}`;
+    const pushBody = `${verifyCampaign?.campaignName || id} is now ${newStatus}.`;
+    pushNotificationService.notifyAdmin(pushTitle, pushBody, '/#/bookings').catch((e) => logger.warn('Push notify failed:', e?.message));
+
     logger.info('=== CAMPAIGN STATUS UPDATE RESPONSE ===');
     logger.info(`Campaign ID: ${id}`);
     logger.info(`Requested Status: ${status}`);
@@ -1224,6 +1247,17 @@ const updateBillboardStatus = async (req, res) => {
     }
 
     logger.campaign('Billboard status updated', `Campaign ID: ${campaignId}, Billboard ID: ${billboardId}, Status: ${normalizedStatus}`);
+
+    // Browser push notification for admin on campaign billboard approval/rejection
+    if (normalizedStatus === 'APPROVED' || normalizedStatus === 'REJECTED') {
+      const action = normalizedStatus === 'APPROVED' ? 'approved' : 'rejected';
+      pushNotificationService.notifyAdmin(
+        `Campaign billboard ${action}`,
+        `Billboard ${billboardId} in campaign ${campaignId} has been ${action}.`,
+        '/#/bookings'
+      ).catch((e) => logger.warn('Push notify failed:', e?.message));
+    }
+
     res.json({ 
       message: 'Billboard status updated successfully', 
       campaign: updatedCampaign,

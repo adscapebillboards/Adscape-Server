@@ -38,6 +38,7 @@ const superadminRoutes = require('./routes/superadminRoutes');
 const setupRoutes = require('./routes/setup');
 const superadminEmailRoutes = require('./routes/superadminEmails');
 const notificationsRoutes = require('./routes/notifications');
+const pushRoutes = require('./routes/push');
 const partnersRoutes = require('./routes/partners');
 const bmiRoutes = require('./routes/bmiRoutes');
 const path = require('path');
@@ -354,6 +355,7 @@ app.use('/api/superadmin-emails', superadminEmailRoutes);
 
 // Notifications routes
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api', pushRoutes);
 app.use('/api/partners', partnersRoutes);
 
 // BMI routes (old simple routes)

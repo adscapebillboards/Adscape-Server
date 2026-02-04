@@ -39,7 +39,7 @@ if (!globalForPrisma.prisma) {
         const start = Date.now();
         await globalForPrisma.prisma.$queryRaw`SELECT 1`;
         const ms = Date.now() - start;
-        console.log(`🔗 [DB] ${safeUrl} | ✅ Connected | ${ms}ms`);
+        // console.log(`🔗 [DB] ${safeUrl} | ✅ Connected | ${ms}ms`);
       } catch (err) {
         console.error(`🔗 [DB] ${safeUrl} | ❌ Error:`, err.message);
       }

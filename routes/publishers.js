@@ -10,20 +10,31 @@ const bcrypt = require('bcrypt');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 let GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+let GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+let GOOGLE_CLIENT_ID_ANDROID = process.env.GOOGLE_CLIENT_ID_ANDROID;
 
 // Trim whitespace and remove quotes if present (same as auth.js)
 if (GOOGLE_CLIENT_ID) {
   GOOGLE_CLIENT_ID = GOOGLE_CLIENT_ID.trim().replace(/^["']|["']$/g, '');
 }
+if (GOOGLE_CLIENT_SECRET) {
+  GOOGLE_CLIENT_SECRET = GOOGLE_CLIENT_SECRET.trim().replace(/^["']|["']$/g, '');
+}
+if (GOOGLE_CLIENT_ID_ANDROID) {
+  GOOGLE_CLIENT_ID_ANDROID = GOOGLE_CLIENT_ID_ANDROID.trim().replace(/^["']|["']$/g, '');
+}
 
-// Support multiple client IDs (web and mobile)
+// Support multiple client IDs (web, iOS/other mobile, Android app)
 const GOOGLE_CLIENT_IDS = [
   GOOGLE_CLIENT_ID,
-  '566249475900-jpqs3cjm0n1ikj56mgocsgm6lm2161u5.apps.googleusercontent.com', // React Native app client ID
+  GOOGLE_CLIENT_ID_ANDROID,
+  '566249475900-jpqs3cjm0n1ikj56mgocsgm6lm2161u5.apps.googleusercontent.com',
 ].filter(Boolean);
 
-// Initialize Google OAuth client
+// Initialize Google OAuth client (for id_token verification)
 const client = new OAuth2Client(GOOGLE_CLIENT_ID);
+// Client with secret for code exchange (React Native OAuth flow)
+const oauth2ClientWithSecret = new OAuth2Client(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, undefined);
 
 // Verify Google OAuth token
 async function verifyGoogleToken(token) {
@@ -77,6 +88,114 @@ async function verifyGoogleToken(token) {
     throw new Error('Invalid Google token');
   }
 }
+
+// Base URL of this API (HTTPS, no trailing slash). Required for OAuth "Invalid Origin" fix.
+const PUBLIC_API_URL = (process.env.PUBLIC_API_URL || '').trim().replace(/\/$/, '') || null;
+// Optional: exact redirect URI for Google (must match Google Console exactly). If set, overrides PUBLIC_API_URL + path.
+const OAUTH_REDIRECT_URI = (process.env.OAUTH_REDIRECT_URI || '').trim() || null;
+
+// Start OAuth from server so the request origin is HTTPS (fixes "Invalid Origin: must end with public TLD")
+router.get('/oauth/google', (req, res) => {
+  if (!GOOGLE_CLIENT_ID) {
+    return res.status(500).send('OAuth not configured (set GOOGLE_CLIENT_ID).');
+  }
+  const callbackUri = OAUTH_REDIRECT_URI || (PUBLIC_API_URL ? `${PUBLIC_API_URL}/api/publishers/oauth/callback` : null);
+  if (!callbackUri) {
+    return res.status(500).send('OAuth not configured (set PUBLIC_API_URL or OAUTH_REDIRECT_URI).');
+  }
+  console.log('OAuth redirect_uri sent to Google (must match Google Console exactly):', callbackUri);
+  const state = require('crypto').randomBytes(16).toString('hex');
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: callbackUri,
+    response_type: 'code',
+    scope: 'openid profile email',
+    state,
+    access_type: 'offline',
+    prompt: 'consent',
+  });
+  res.redirect(302, `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+});
+
+// Google redirects here (HTTPS origin). We store code by state and show a page with "Open app" link (no auto-redirect to avoid blank page).
+const APP_SCHEME = 'adscapeadminrn://oauth';
+const oauthPendingByState = new Map();
+const OAUTH_STATE_TTL_MS = 5 * 60 * 1000;
+
+function cleanupExpiredOAuthState() {
+  const now = Date.now();
+  for (const [s, entry] of oauthPendingByState.entries()) {
+    if (now - entry.createdAt > OAUTH_STATE_TTL_MS) oauthPendingByState.delete(s);
+  }
+}
+
+router.get('/oauth/callback', (req, res) => {
+  const { code, state, error } = req.query;
+  if (state && code) {
+    oauthPendingByState.set(state, { code, createdAt: Date.now() });
+    cleanupExpiredOAuthState();
+  }
+  const params = {};
+  if (error) params.error = error;
+  else if (!code) params.error = 'no_code';
+  else if (state) params.state = state;
+  else {
+    params.code = code;
+    if (state) params.state = state;
+  }
+  const appUrl = params.state
+    ? `${APP_SCHEME}?state=${encodeURIComponent(params.state)}`
+    : `${APP_SCHEME}?${new URLSearchParams(params).toString()}`;
+  const appUrlEscaped = appUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.send(
+    '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Return to app</title></head><body style="margin:0;padding:24px;font-family:system-ui,sans-serif;background:#f5f5f5;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;box-sizing:border-box;">' +
+    '<div style="background:#fff;padding:32px;border-radius:12px;max-width:360px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.08);">' +
+    '<p style="margin:0 0 24px;font-size:18px;color:#333;">Sign-in complete.</p>' +
+    '<p style="margin:0 0 24px;font-size:14px;color:#666;">Tap the button below to return to the app.</p>' +
+    `<a href="${appUrlEscaped}" style="display:inline-block;padding:14px 28px;font-size:16px;font-weight:600;color:#fff;background:#1976d2;text-decoration:none;border-radius:8px;">Open app</a>` +
+    '</div></body></html>'
+  );
+});
+
+// App opens with adscapeadminrn://oauth?state=xxx and calls this to get the code, then exchanges it for id_token.
+router.get('/oauth/result', (req, res) => {
+  const { state } = req.query;
+  if (!state) return res.status(400).json({ error: 'state required' });
+  const entry = oauthPendingByState.get(state);
+  oauthPendingByState.delete(state);
+  if (!entry) return res.status(404).json({ error: 'state not found or expired' });
+  res.json({ code: entry.code });
+});
+
+// Exchange OAuth authorization code for id_token (for React Native; client_secret must stay on server)
+// When using server proxy flow, redirectUri is the server callback URL; optional body for backwards compat.
+router.post('/oauth/exchange', async (req, res) => {
+  const { code, redirectUri: bodyRedirectUri } = req.body;
+  if (!code) {
+    return res.status(400).json({ error: 'code is required' });
+  }
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    console.error('GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not configured');
+    return res.status(500).json({ error: 'Google OAuth not configured' });
+  }
+  const redirectUri = bodyRedirectUri || OAUTH_REDIRECT_URI || (PUBLIC_API_URL ? `${PUBLIC_API_URL}/api/publishers/oauth/callback` : null);
+  if (!redirectUri) {
+    return res.status(400).json({ error: 'redirect_uri required (set PUBLIC_API_URL or OAUTH_REDIRECT_URI or send redirectUri)' });
+  }
+  try {
+    const { tokens } = await oauth2ClientWithSecret.getToken({ code, redirect_uri: redirectUri });
+    if (!tokens.id_token) {
+      return res.status(400).json({ error: 'No ID token in Google response' });
+    }
+    res.json({ id_token: tokens.id_token });
+  } catch (err) {
+    console.error('OAuth code exchange error:', err);
+    res.status(400).json({ error: 'Failed to exchange code: ' + (err.message || 'invalid code or redirect_uri') });
+  }
+});
 
 // Google OAuth Publisher Registration
 router.post('/google/signup', async (req, res) => {

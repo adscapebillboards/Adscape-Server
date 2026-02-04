@@ -1,6 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
-const { getCurrentISTTime, convertUTCToIST, getStartOfDayIST, getEndOfDayIST } = require('../utils/timeUtils');
+const { getCurrentISTTime, getStartOfDayIST, getEndOfDayIST } = require('../utils/timeUtils');
 
 // Function to update campaign status based on start and end dates
 const updateCampaignStatusByDate = async (campaignId) => {
@@ -49,8 +49,8 @@ const updateCampaignStatusByDate = async (campaignId) => {
         continue;
       }
 
-      const startDate = convertUTCToIST(billboard.bookingDetails.startDate);
-      const endDate = convertUTCToIST(billboard.bookingDetails.endDate);
+      const startDate = getStartOfDayIST(billboard.bookingDetails.startDate);
+      const endDate = getEndOfDayIST(billboard.bookingDetails.endDate);
       let billboardStatus = billboard.status;
 
       // Only update to SCHEDULED/LIVE/COMPLETED if campaign is approved and payment completed
@@ -260,8 +260,8 @@ const getCampaignStatusSummary = async (campaignId) => {
         };
       }
 
-      const startDate = convertUTCToIST(billboard.bookingDetails.startDate);
-      const endDate = convertUTCToIST(billboard.bookingDetails.endDate);
+      const startDate = getStartOfDayIST(billboard.bookingDetails.startDate);
+      const endDate = getEndOfDayIST(billboard.bookingDetails.endDate);
       let dateBasedStatus = null;
 
       if (now < startDate) {
