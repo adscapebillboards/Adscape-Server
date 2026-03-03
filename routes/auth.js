@@ -24,14 +24,19 @@ const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 // Verify Google OAuth token
 async function verifyGoogleToken(token) {
   try {
+    const allowedAudiences = [
+      GOOGLE_CLIENT_ID,
+      '566249475900-3inhmnhmeca6eanqt0rm63r2b4051bg6.apps.googleusercontent.com'
+    ];
+
     // Decode token to see audience without verification (for debugging)
     try {
       const parts = token.split('.');
       if (parts.length === 3) {
         const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
         console.log('🔍 Token audience:', payload.aud);
-        console.log('🔍 Expected audience:', GOOGLE_CLIENT_ID);
-        console.log('🔍 Match:', payload.aud === GOOGLE_CLIENT_ID);
+        console.log('🔍 Expected audiences:', allowedAudiences);
+        console.log('🔍 Match:', allowedAudiences.includes(payload.aud));
       }
     } catch (decodeError) {
       console.log('Could not decode token for debugging');
@@ -39,7 +44,7 @@ async function verifyGoogleToken(token) {
 
     const ticket = await client.verifyIdToken({
       idToken: token,
-      audience: GOOGLE_CLIENT_ID,
+      audience: allowedAudiences,
     });
     const payload = ticket.getPayload();
     return {
@@ -53,7 +58,10 @@ async function verifyGoogleToken(token) {
     console.error('Google token verification failed:', error);
     console.error('Error details:', {
       message: error.message,
-      expectedClientId: GOOGLE_CLIENT_ID,
+      expectedClientIds: [
+        GOOGLE_CLIENT_ID,
+        '566249475900-3inhmnhmeca6eanqt0rm63r2b4051bg6.apps.googleusercontent.com'
+      ],
       errorName: error.name
     });
     throw new Error('Invalid Google token');
@@ -79,7 +87,7 @@ router.post('/google/signup', async (req, res) => {
     // Verify Google token
     const googleUser = await verifyGoogleToken(googleToken);
     console.log('Google User Verified:', { email: googleUser.email, name: googleUser.name });
-    
+
     // Check if user already exists
     const existingUser = await prisma.user.findUnique({
       where: { email: googleUser.email }
@@ -114,7 +122,7 @@ router.post('/google/signup', async (req, res) => {
     });
 
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
-    
+
     console.log('User created successfully:', { id: user.id, email: user.email });
     res.json({ token, user });
   } catch (error) {
@@ -142,7 +150,7 @@ router.post('/google/login', async (req, res) => {
     // Verify Google token
     const googleUser = await verifyGoogleToken(googleToken);
     console.log('Google User Verified:', { email: googleUser.email, name: googleUser.name });
-    
+
     // Find existing user
     const user = await prisma.user.findUnique({
       where: { email: googleUser.email }
@@ -161,16 +169,16 @@ router.post('/google/login', async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
-    
+
     console.log('User logged in successfully:', { id: user.id, email: user.email });
-    res.json({ 
-      token, 
-      user: { 
-        id: user.id, 
-        email: user.email, 
-        fullName: user.fullName, 
-        phoneNumber: user.phoneNumber 
-      } 
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        phoneNumber: user.phoneNumber
+      }
     });
   } catch (error) {
     console.error('Google Login Error:', error);
@@ -182,9 +190,9 @@ router.post('/google/login', async (req, res) => {
 router.post('/oauth/complete-profile', async (req, res) => {
   const { email, fullName, phoneNumber, googleId, picture, joinDate, status } = req.body;
 
-  console.log('OAuth Complete Profile Request:', { 
-    email, 
-    fullName, 
+  console.log('OAuth Complete Profile Request:', {
+    email,
+    fullName,
     phoneNumber: phoneNumber ? 'Present' : 'Missing',
     password: 'Not required',
     googleId: googleId ? 'Present' : 'Missing'
@@ -231,7 +239,7 @@ router.post('/oauth/complete-profile', async (req, res) => {
     });
 
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
-    
+
     console.log('OAuth user created successfully:', { id: user.id, email: user.email });
     res.json({ token, user });
   } catch (error) {
@@ -245,7 +253,7 @@ router.post('/signup', async (req, res) => {
   const { email, password, fullName, phoneNumber } = req.body; // ✅ add phoneNumber here
 
   console.log('Received data:', { email, password, fullName, phoneNumber }); // Log the received data
-  
+
 
 
   try {
@@ -275,7 +283,7 @@ router.post('/signup', async (req, res) => {
     });
 
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
-    
+
     console.log('JWT_SECRET:', JWT_SECRET);
 
     res.json({ token, user });
@@ -325,8 +333,8 @@ router.post('/publishers/login', async (req, res) => {
 
     // Check if publisher status is active
     if (publisher.status !== 'active') {
-      return res.status(403).json({ 
-        error: 'Account not approved', 
+      return res.status(403).json({
+        error: 'Account not approved',
         status: publisher.status || 'pending',
         message: 'Your account is pending approval. Please wait for admin approval before logging in.'
       });
@@ -334,16 +342,16 @@ router.post('/publishers/login', async (req, res) => {
 
     const token = jwt.sign({ id: publisher.id, email: publisher.email, role: 'publisher' }, JWT_SECRET, { expiresIn: '30d' });
 
-    res.json({ 
-      token, 
-      user: { 
-        id: publisher.id, 
-        email: publisher.email, 
+    res.json({
+      token,
+      user: {
+        id: publisher.id,
+        email: publisher.email,
         name: publisher.name,
         phone: publisher.phone,
         location: publisher.location,
         role: 'publisher'
-      } 
+      }
     });
   } catch (err) {
     console.error('Publisher Login Error:', err);
@@ -354,116 +362,116 @@ router.post('/publishers/login', async (req, res) => {
 
 // Add to auth.js route file
 const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'No token provided' });
-  
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-      if (err) return res.status(403).json({ error: 'Invalid token' });
-      req.user = user;
-      next();
+  const authHeader = req.headers['authorization'];
+  const token = authHeader?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Invalid token' });
+    req.user = user;
+    next();
+  });
+};
+
+router.get('/me', authenticateToken, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phoneNumber: true,
+        joindate: true,
+        status: true,
+        totalbookings: true,
+        totalspent: true,
+        lastbooking: true
+      }
     });
-  };
-  
-  router.get('/me', authenticateToken, async (req, res) => {
-    try {
-      const user = await prisma.user.findUnique({
-        where: { id: req.user.id },
-        select: {
-          id: true,
-          email: true,
-          fullName: true,
-          phoneNumber: true,
-          joindate: true,
-          status: true,
-          totalbookings: true,
-          totalspent: true,
-          lastbooking: true
-        }
-      });
-      res.json({ user });
-    } catch (err) {
-      console.error('Fetch user error:', err);
-      res.status(500).json({ error: 'Failed to fetch user' });
+    res.json({ user });
+  } catch (err) {
+    console.error('Fetch user error:', err);
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
+
+// Update user profile
+router.put('/me', authenticateToken, async (req, res) => {
+  try {
+    const updateData = {};
+
+    // Only allow updating specific fields
+    if (req.body.phoneNumber !== undefined) {
+      updateData.phoneNumber = req.body.phoneNumber;
     }
-  });
-
-  // Update user profile
-  router.put('/me', authenticateToken, async (req, res) => {
-    try {
-      const updateData = {};
-      
-      // Only allow updating specific fields
-      if (req.body.phoneNumber !== undefined) {
-        updateData.phoneNumber = req.body.phoneNumber;
-      }
-      if (req.body.fullName !== undefined) {
-        updateData.fullName = req.body.fullName;
-      }
-      if (req.body.location !== undefined) {
-        // Handle location if needed
-        updateData.location = req.body.location;
-      }
-
-      const user = await prisma.user.update({
-        where: { id: req.user.id },
-        data: updateData,
-        select: {
-          id: true,
-          email: true,
-          fullName: true,
-          phoneNumber: true,
-          joindate: true,
-          status: true,
-          totalbookings: true,
-          totalspent: true,
-          lastbooking: true
-        }
-      });
-      
-      console.log('User profile updated:', { id: user.id, phoneNumber: user.phoneNumber });
-      res.json({ user });
-    } catch (err) {
-      console.error('Update user error:', err);
-      res.status(500).json({ error: 'Failed to update user profile' });
+    if (req.body.fullName !== undefined) {
+      updateData.fullName = req.body.fullName;
     }
-  });
-  
+    if (req.body.location !== undefined) {
+      // Handle location if needed
+      updateData.location = req.body.location;
+    }
 
-  // Get all users
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: updateData,
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phoneNumber: true,
+        joindate: true,
+        status: true,
+        totalbookings: true,
+        totalspent: true,
+        lastbooking: true
+      }
+    });
+
+    console.log('User profile updated:', { id: user.id, phoneNumber: user.phoneNumber });
+    res.json({ user });
+  } catch (err) {
+    console.error('Update user error:', err);
+    res.status(500).json({ error: 'Failed to update user profile' });
+  }
+});
+
+
+// Get all users
 router.get('/users', authenticateToken, async (req, res) => {
   try {
     const user = await prisma.user.upsert({
-  where: { email },
-  update: {
-    fullName,
-    phoneNumber,
-    googleId,
-    joindate: joinDate ? new Date(joinDate) : undefined,
-    status: status || undefined
-  },
-  create: {
-    email,
-    fullName,
-    phoneNumber,
-    googleId,
-    joindate: joinDate ? new Date(joinDate) : new Date(),
-    status: status || 'active',
-    totalbookings: 0,
-    totalspent: '0',
-    emailVerified: true
-  },
-  select: {
-    id: true,
-    email: true,
-    fullName: true,
-    phoneNumber: true,
-    joindate: true,
-    status: true,
-    totalbookings: true,
-    totalspent: true
-  }
-});
+      where: { email },
+      update: {
+        fullName,
+        phoneNumber,
+        googleId,
+        joindate: joinDate ? new Date(joinDate) : undefined,
+        status: status || undefined
+      },
+      create: {
+        email,
+        fullName,
+        phoneNumber,
+        googleId,
+        joindate: joinDate ? new Date(joinDate) : new Date(),
+        status: status || 'active',
+        totalbookings: 0,
+        totalspent: '0',
+        emailVerified: true
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phoneNumber: true,
+        joindate: true,
+        status: true,
+        totalbookings: true,
+        totalspent: true
+      }
+    });
 
     res.json({ users });
   } catch (err) {
