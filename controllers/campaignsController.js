@@ -21,13 +21,13 @@ const createCampaign = async (req, res) => {
       // Calculate total price for this billboard
       const days = (new Date(billboard.endDate) - new Date(billboard.startDate)) / (1000 * 60 * 60 * 24) + 1;
       const totalPrice = days * billboard.pricePerDay;
-      
+
       // Extract asset scheduling information
       const assetScheduling = billboard.assetScheduling || {};
       const assetStartDate = assetScheduling.assetStartDate || billboard.bookingDetails?.startDate;
       const assetEndDate = assetScheduling.assetEndDate || billboard.bookingDetails?.endDate;
       const duration = assetScheduling.duration || 15; // Default 15 seconds
-      
+
       return {
         ...billboard,
         totalPrice, // Add total price for this billboard
@@ -62,6 +62,13 @@ const createCampaign = async (req, res) => {
       }
     });
 
+    const pushNotificationService = require('../services/pushNotificationService');
+    pushNotificationService.notifyAdmin(
+      'New campaign submitted',
+      `Campaign "Auto Campaign" by ${user.email} is waiting for approval.`,
+      '/#/bookings'
+    ).catch(e => logger.warn('Push notify failed after campaign create:', e?.message));
+
     logger.campaign('Campaign created successfully', `Campaign ID: ${campaign.id}, User: ${user.email}`);
     res.status(201).json({ message: 'Campaign created successfully', campaign });
   } catch (err) {
@@ -73,9 +80,9 @@ const createCampaign = async (req, res) => {
 const getUserCampaigns = async (req, res) => {
   try {
     const user = req.user; // From getUserInfo middleware
-    
+
     let whereClause = {};
-    
+
     // Role-based filtering
     if (user.role === 'superadmin') {
       // Superadmin can see all campaigns
@@ -153,7 +160,7 @@ const updateBillboardStatus = async (req, res) => {
 
     // Check if all billboards are now approved
     const allBillboardsApproved = billboards.every(b => b.status?.toUpperCase() === 'APPROVED');
-    
+
     logger.info(`🔍 Campaign approval status check:`, {
       campaignId,
       allBillboardsApproved,
@@ -164,23 +171,23 @@ const updateBillboardStatus = async (req, res) => {
 
     if (allBillboardsApproved) {
       logger.info(`🎉 All billboards are now approved! Updating campaign status...`);
-      
+
       try {
         // Update campaign status to APPROVED
         const campaignWithApprovedStatus = await prisma.campaign.update({
           where: { id: campaignId },
-          data: { 
+          data: {
             status: 'APPROVED',
             updatedAt: new Date()
           }
         });
-        
+
         logger.info(`✅ Campaign status updated to: ${campaignWithApprovedStatus.status}`);
-        
+
         // Note: Slot generation is now only done after payment completion, not on approval
         // This ensures slots are only created when payment is confirmed
         logger.info('⚠️  Slot generation will occur after payment completion, not on approval');
-        
+
         // Update user metrics
         if (campaign.owner) {
           logger.info(`👤 Updating user statistics for: ${campaign.owner}`);
@@ -188,15 +195,15 @@ const updateBillboardStatus = async (req, res) => {
         } else {
           logger.warn(`⚠️ No owner found for campaign ${campaignId}, skipping user statistics update`);
         }
-        
+
       } catch (campaignUpdateError) {
         logger.error('❌ Error updating campaign status:', campaignUpdateError);
       }
     }
 
     logger.campaign('Billboard status updated', `Campaign ID: ${campaignId}, Billboard ID: ${billboardId}, Status: ${status}`);
-    res.json({ 
-      message: 'Billboard status updated successfully', 
+    res.json({
+      message: 'Billboard status updated successfully',
       campaign: updatedCampaign,
       updatedBillboard: billboards[billboardIndex]
     });
@@ -309,10 +316,10 @@ const generateSlotsForBillboard = async (campaignId, billboard) => {
 const generateSlotsForCampaign = async (campaignId, billboards) => {
   try {
     logger.info(`🎬 Generating slots for campaign ${campaignId} with ${billboards.length} billboards`);
-    
+
     const approvedBillboards = billboards.filter(b => b.status?.toUpperCase() === 'APPROVED');
     logger.info(`📋 Found ${approvedBillboards.length} approved billboards`);
-    
+
     for (const billboard of approvedBillboards) {
       try {
         await generateSlotsForBillboard(campaignId, billboard);
@@ -321,7 +328,7 @@ const generateSlotsForCampaign = async (campaignId, billboards) => {
         // Continue with other billboards
       }
     }
-    
+
     logger.info(`🎉 Slot generation completed for campaign ${campaignId}`);
   } catch (error) {
     logger.error(`❌ Error generating slots for campaign ${campaignId}:`, error);
@@ -339,7 +346,7 @@ const updateUserStatistics = async (userEmail, campaignAmount) => {
     }
 
     logger.info(`👤 Updating user statistics for ${userEmail} with amount ${campaignAmount}`);
-    
+
     // Find the user by email
     const user = await prisma.user.findUnique({
       where: { email: userEmail }
@@ -366,7 +373,7 @@ const updateUserStatistics = async (userEmail, campaignAmount) => {
         status: 'active'
       }
     });
-    
+
     logger.info(`✅ User statistics updated for ${userEmail}:`, {
       newTotalBookings,
       newTotalSpent,

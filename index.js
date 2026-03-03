@@ -5,6 +5,7 @@ const cors = require('cors');
 const assetCleanupScheduler = require('./utils/assetCleanupScheduler');
 const express = require('express');
 const prisma = require('./db/db');
+const pushRoutes = require('./routes/push');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 // Socket.IO setup
@@ -12,25 +13,25 @@ const { Server } = require("socket.io");
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: {
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://127.0.0.1:3000",
-      "http://127.0.0.1:5173",
-      "https://your-frontend-domain.com",
-      "https://adscape.co.in",
-      "https://admin.adscape.co.in",
-      "http://localhost:8080",
-      "http://127.0.0.1:5500",
-      "https://endearing-begonia-927b56.netlify.app",
-      "https://bmi-client.onrender.com"
-    ],
-    methods: ["GET", "POST"],
-    allowedHeaders: ["ngrok-skip-browser-warning"],
-    credentials: true
-  },
-  allowEIO3: true
+    cors: {
+        origin: [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+            "https://your-frontend-domain.com",
+            "https://adscape.co.in",
+            "https://admin.adscape.co.in",
+            "http://localhost:8080",
+            "http://127.0.0.1:5500",
+            "https://endearing-begonia-927b56.netlify.app",
+            "https://bmi-client.onrender.com"
+        ],
+        methods: ["GET", "POST"],
+        allowedHeaders: ["ngrok-skip-browser-warning"],
+        credentials: true
+    },
+    allowEIO3: true
 });
 
 // CORS is already configured in app-new.js
@@ -40,102 +41,132 @@ const io = new Server(server, {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Push Notifications APIs
+app.use('/api', pushRoutes);
+
 // Socket.IO connection handling
 io.on('connection', (socket) => {
-  console.log('Player connected:', socket.id);
-  
-  // Send immediate welcome message
-  socket.emit('connected', { message: 'Connected to server', socketId: socket.id });
-  
-  // Handle test events
-  socket.on('test', (data) => {
-    console.log('Test event received:', data);
-    socket.emit('test-response', { message: 'Test response from server', received: data });
-  });
-  
-  // Handle player joining
-  socket.on('player-join', (data) => {
-    console.log('[SOCKET] Player joined:', data);
-    const machineId = data.machineId || data.screenId;
-    const screenId = data.screenId || data.machineId;
-    
-    // Join multiple rooms for compatibility
-    socket.join(`player-${machineId}`);
-    socket.join(`screen:${screenId}`);
-    
-    console.log('[SOCKET] Player joined rooms:', {
-      socketId: socket.id,
-      machineId,
-      screenId,
-      rooms: [`player-${machineId}`, `screen:${screenId}`]
-    });
-    
-    socket.emit('connected', { 
-      message: 'Connected to server',
-      socketId: socket.id,
-      rooms: [`player-${machineId}`, `screen:${screenId}`]
-    });
-  });
-  
-  // Handle asset playing status updates
-  socket.on('asset-playing', (data) => {
-    console.log('Asset playing:', data);
-    // Broadcast to all connected clients (for admin dashboard)
-    io.emit('asset-status-update', {
-      machineId: data.machineId,
-      screenId: data.screenId,
-      currentAsset: data.currentAsset,
-      isPlaying: data.isPlaying,
-      timestamp: new Date().toISOString()
-    });
-  });
-  
-  // Handle player status updates
-  socket.on('player-status', (data) => {
-    console.log('Player status update:', data);
-    io.emit('player-status-update', {
-      machineId: data.machineId,
-      screenId: data.screenId,
-      status: data.status,
-      lastActive: new Date().toISOString()
-    });
-  });
+    console.log('Player connected:', socket.id);
 
-  // Handle BMI data from test app
-  socket.on('bmi-data', async (data) => {
-    console.log('BMI data received:', data);
-    
-    try {
-      // Store BMI data in database
-      const bmiController = require('./controllers/bmiController');
-      const storeResult = await bmiController.storeBMIData(data);
-      
-      if (storeResult.success) {
-        console.log('BMI data stored successfully in database');
-      } else {
-        console.error('Failed to store BMI data:', storeResult.error);
-      }
-    } catch (error) {
-      console.error('Error storing BMI data:', error);
-    }
-    
-    // Broadcast BMI data to all connected players
-    io.emit('bmi-data-received', {
-      ...data,
-      receivedAt: new Date().toISOString()
+    // Send immediate welcome message
+    socket.emit('connected', { message: 'Connected to server', socketId: socket.id });
+
+    // Handle test events
+    socket.on('test', (data) => {
+        console.log('Test event received:', data);
+        socket.emit('test-response', { message: 'Test response from server', received: data });
     });
-    
-    // Also send to specific player if device ID matches
-    const targetPlayerRoom = `player-${data.deviceId}`;
-    socket.to(targetPlayerRoom).emit('bmi-data-received', {
-      ...data,
-      receivedAt: new Date().toISOString()
+
+    // Handle player joining
+    socket.on('player-join', (data) => {
+        console.log('[SOCKET] Player joined:', data);
+        const machineId = data.machineId || data.screenId;
+        const screenId = data.screenId || data.machineId;
+
+        // Join multiple rooms for compatibility
+        socket.join(`player-${machineId}`);
+        socket.join(`screen:${screenId}`);
+
+        console.log('[SOCKET] Player joined rooms:', {
+            socketId: socket.id,
+            machineId,
+            screenId,
+            rooms: [`player-${machineId}`, `screen:${screenId}`]
+        });
+
+        socket.emit('connected', {
+            message: 'Connected to server',
+            socketId: socket.id,
+            rooms: [`player-${machineId}`, `screen:${screenId}`]
+        });
     });
-  });
-  
-  socket.on('disconnect', () => {
-    console.log('Player disconnected:', socket.id);
-  });
+
+    // Handle asset playing status updates
+    socket.on('asset-playing', (data) => {
+        console.log('Asset playing:', data);
+        // Broadcast to all connected clients (for admin dashboard)
+        io.emit('asset-status-update', {
+            machineId: data.machineId,
+            screenId: data.screenId,
+            currentAsset: data.currentAsset,
+            isPlaying: data.isPlaying,
+            timestamp: new Date().toISOString()
+        });
+    });
+
+    // Handle player status updates
+    socket.on('player-status', (data) => {
+        console.log('Player status update:', data);
+        io.emit('player-status-update', {
+            machineId: data.machineId,
+            screenId: data.screenId,
+            status: data.status,
+            lastActive: new Date().toISOString()
+        });
+    });
+
+    // Handle BMI data from test app
+    socket.on('bmi-data', async (data) => {
+        console.log('BMI data received:', data);
+
+        try {
+            // Store BMI data in database
+            const bmiController = require('./controllers/bmiController');
+            const storeResult = await bmiController.storeBMIData(data);
+
+            if (storeResult.success) {
+                console.log('BMI data stored successfully in database');
+            } else {
+                console.error('Failed to store BMI data:', storeResult.error);
+            }
+        } catch (error) {
+            console.error('Error storing BMI data:', error);
+        }
+
+        // Broadcast BMI data to all connected players
+        io.emit('bmi-data-received', {
+            ...data,
+            receivedAt: new Date().toISOString()
+        });
+
+        // Also send to specific player if device ID matches
+        const targetPlayerRoom = `player-${data.deviceId}`;
+        socket.to(targetPlayerRoom).emit('bmi-data-received', {
+            ...data,
+            receivedAt: new Date().toISOString()
+        });
+    });
+
+    // -------------------------------------------------------------
+    // Live Preview Support (Adscape Player -> Admin Dashboard)
+    // -------------------------------------------------------------
+    socket.on('request-live-preview', (data) => {
+        // Dashboard client asks a given screen ID to send a snapshot
+        const { screenId } = data;
+        console.log(`[SOCKET] Admin requested live preview for screen: ${screenId}`);
+        // Notify the specific screen to capture and send a frame
+        if (screenId) {
+            io.to(`screen:${screenId}`).emit('request-live-preview', { adminSocketId: socket.id });
+        }
+    });
+
+    // Android App emits this back
+    socket.on('live-preview-frame', (data) => {
+        const { screenId, frameData, adminSocketId } = data;
+        // console.log(`[SOCKET] Received live preview frame from screen: ${screenId}`);
+        // Send it directly to the dashboard admin who requested it, or broadcast it to a specific admin room
+        if (adminSocketId) {
+            io.to(adminSocketId).emit('live-preview-frame-response', { screenId, frameData });
+        } else {
+            // Fallback: emit to all admins if we didn't track socket id
+            io.emit('live-preview-frame-response', { screenId, frameData });
+        }
+    });
+
+
+    socket.on('disconnect', () => {
+        console.log('Player disconnected:', socket.id);
+    });
 });
 
 
@@ -204,21 +235,21 @@ io.on('connection', (socket) => {
     console.log('[SOCKET] connected', socket.id, 'from', socket.handshake.address);
 
     socket.on('player-join', (data) => {
-		try {
+        try {
             const screenId = String(data?.screenId || '');
             console.log('[SOCKET] player-join', { socketId: socket.id, screenId, data });
-			if (screenId) {
-				socket.join(`screen:${screenId}`);
+            if (screenId) {
+                socket.join(`screen:${screenId}`);
                 console.log(`[SOCKET] joined room screen:${screenId}`);
-			}
-		} catch (e) {
+            }
+        } catch (e) {
             console.error('[SOCKET] player-join error', e);
-		}
-	});
+        }
+    });
 
     socket.on('disconnect', (reason) => {
         console.log('[SOCKET] disconnected', socket.id, 'reason:', reason);
-	});
+    });
 });
 
 // Health
@@ -388,17 +419,17 @@ app.delete('/api/adscape/player/:screenId', async (req, res) => {
 
 // Compute BMI helper
 function computeBMI(heightCm, weightKg) {
-	const h = Number(heightCm);
-	const w = Number(weightKg);
-	if (!h || !w) return { bmi: null, category: 'invalid' };
-	const heightM = h / 100;
-	const bmi = Number((w / (heightM * heightM)).toFixed(1));
-	let category = 'Normal';
-	if (bmi < 18.5) category = 'Underweight';
-	else if (bmi < 25) category = 'Normal';
-	else if (bmi < 30) category = 'Overweight';
-	else category = 'Obese';
-	return { bmi, category };
+    const h = Number(heightCm);
+    const w = Number(weightKg);
+    if (!h || !w) return { bmi: null, category: 'invalid' };
+    const heightM = h / 100;
+    const bmi = Number((w / (heightM * heightM)).toFixed(1));
+    let category = 'Normal';
+    if (bmi < 18.5) category = 'Underweight';
+    else if (bmi < 25) category = 'Normal';
+    else if (bmi < 30) category = 'Overweight';
+    else category = 'Obese';
+    return { bmi, category };
 }
 
 // Calculate streak helper
@@ -477,42 +508,42 @@ function calculateStreak(bmiRecords) {
 // POST /api/bmi -> { heightCm, weightKg, screenId, appVersion }
 app.post('/api/bmi', async (req, res) => {
     try {
-		const { heightCm, weightKg, screenId, appVersion } = req.body || {};
-		if (!heightCm || !weightKg || !screenId) {
-			return res.status(400).json({ error: 'heightCm, weightKg, screenId required' });
-		}
-		
-		// Get the registered player's flow type from database
-		let playerFlowType = null;
-		try {
-			const player = await prisma.adscapePlayer.findUnique({
-				where: { screenId: String(screenId) }
-			});
-			playerFlowType = player?.flowType;
-			console.log('[BMI] Player flow type from DB:', playerFlowType, 'for screenId:', screenId);
-		} catch (e) {
-			console.log('[BMI] Could not fetch player flow type:', e.message);
-		}
-		
-		const { bmi, category } = computeBMI(heightCm, weightKg);
-		const bmiId = uuidv4();
-		const timestamp = new Date().toISOString();
-		// Generate fortune cookie message for F2 flow, null for F1 (will be generated after payment)
+        const { heightCm, weightKg, screenId, appVersion } = req.body || {};
+        if (!heightCm || !weightKg || !screenId) {
+            return res.status(400).json({ error: 'heightCm, weightKg, screenId required' });
+        }
+    	
+        // Get the registered player's flow type from database
+        let playerFlowType = null;
+        try {
+            const player = await prisma.adscapePlayer.findUnique({
+                where: { screenId: String(screenId) }
+            });
+            playerFlowType = player?.flowType;
+            console.log('[BMI] Player flow type from DB:', playerFlowType, 'for screenId:', screenId);
+        } catch (e) {
+            console.log('[BMI] Could not fetch player flow type:', e.message);
+        }
+    	
+        const { bmi, category } = computeBMI(heightCm, weightKg);
+        const bmiId = uuidv4();
+        const timestamp = new Date().toISOString();
+        // Generate fortune cookie message for F2 flow, null for F1 (will be generated after payment)
         // Use player's flow type from DB, fallback to appVersion from request
         const effectiveFlowType = playerFlowType || appVersion;
         const fortune = (effectiveFlowType === 'F2' || effectiveFlowType === 'f2') ? await generateFortuneMessage({ bmi, category }) : null;
         console.log('[BMI] Effective flow type:', effectiveFlowType, 'fortune generated:', !!fortune);
         
-		const payload = {
-			bmiId,
-			screenId: String(screenId),
-			height: Number(heightCm),
-			weight: Number(weightKg),
-			bmi,
-			category,
-			timestamp,
-			fortune
-		};
+        const payload = {
+            bmiId,
+            screenId: String(screenId),
+            height: Number(heightCm),
+            weight: Number(weightKg),
+            bmi,
+            category,
+            timestamp,
+            fortune
+        };
         bmiStore.set(bmiId, payload);
 
         // Upsert Screen and create BMI record
@@ -538,14 +569,14 @@ app.post('/api/bmi', async (req, res) => {
             }
         });
 
-		// Build web client URL (adjust if you host client elsewhere)
-		const clientBase = process.env.CLIENT_BASE_URL || 'https://bmi-client.onrender.com';
-		// Provide API base in URL hash so SPA can call backend even when hosted elsewhere
-		const inferredProto = (req.headers['x-forwarded-proto'] || '').toString().split(',')[0] || req.protocol;
-		const apiBase = process.env.API_PUBLIC_BASE || `${inferredProto}://${req.get('host')}`;
-		// Use effective flow type for web URL (convert to lowercase for client compatibility)
-		const version = (effectiveFlowType || appVersion || 'f1').toLowerCase();
-		const webUrl = `${clientBase}?screenId=${encodeURIComponent(String(screenId))}&bmiId=${encodeURIComponent(bmiId)}&appVersion=${encodeURIComponent(version)}#server=${encodeURIComponent(apiBase)}`;
+        // Build web client URL (adjust if you host client elsewhere)
+        const clientBase = process.env.CLIENT_BASE_URL || 'https://bmi-client.onrender.com';
+        // Provide API base in URL hash so SPA can call backend even when hosted elsewhere
+        const inferredProto = (req.headers['x-forwarded-proto'] || '').toString().split(',')[0] || req.protocol;
+        const apiBase = process.env.API_PUBLIC_BASE || `${inferredProto}://${req.get('host')}`;
+        // Use effective flow type for web URL (convert to lowercase for client compatibility)
+        const version = (effectiveFlowType || appVersion || 'f1').toLowerCase();
+        const webUrl = `${clientBase}?screenId=${encodeURIComponent(String(screenId))}&bmiId=${encodeURIComponent(bmiId)}&appVersion=${encodeURIComponent(version)}#server=${encodeURIComponent(apiBase)}`;
 
         // Emit to the Android player room so it can open a modal
         const emitPayload = {
@@ -555,11 +586,11 @@ app.post('/api/bmi', async (req, res) => {
         io.to(`screen:${String(screenId)}`).emit('bmi-data-received', emitPayload);
         console.log('[BMI] created and emitted', emitPayload);
 
-		return res.status(201).json({ ok: true, bmiId, webUrl });
+        return res.status(201).json({ ok: true, bmiId, webUrl });
     } catch (e) {
         console.error('[BMI] POST /api/bmi error', e);
-		return res.status(500).json({ error: 'internal_error' });
-	}
+        return res.status(500).json({ error: 'internal_error' });
+    }
 });
 
 // POST /api/user -> { name, mobile } -> create or find user
@@ -974,8 +1005,8 @@ app.get('/api/debug/connections', (_req, res) => {
 // Global error handler to ensure JSON responses
 app.use((err, req, res, next) => {
     console.error('[SERVER] Global error:', err);
-    res.status(500).json({ 
-        error: 'internal_server_error', 
+    res.status(500).json({
+        error: 'internal_server_error',
         message: err.message,
         path: req.path
     });
@@ -998,43 +1029,43 @@ app.set('io', io);
 
 // Test database connection on startup
 async function testDatabaseConnection() {
-  try {
-    console.log('🔌 Testing database connection...');
-    await prisma.$connect();
-    console.log('✅ Database connected successfully');
-    
-    // Test a simple query
-    await prisma.$queryRaw`SELECT 1`;
-    console.log('✅ Database query test passed');
-  } catch (error) {
-    console.error('❌ Database connection failed:', error.message);
-    console.error('Error details:', {
-      code: error.code,
-      meta: error.meta,
-      message: error.message
-    });
-    console.error('\n⚠️  Please check your .env file and ensure:');
-    console.error('   - DATABASE_URL is set, OR');
-    console.error('   - PGHOST, PGUSER, PGPASSWORD, PGPORT, PGDATABASE are all set');
-    process.exit(1);
-  }
+    try {
+        console.log('🔌 Testing database connection...');
+        await prisma.$connect();
+        console.log('✅ Database connected successfully');
+
+        // Test a simple query
+        await prisma.$queryRaw`SELECT 1`;
+        console.log('✅ Database query test passed');
+    } catch (error) {
+        console.error('❌ Database connection failed:', error.message);
+        console.error('Error details:', {
+            code: error.code,
+            meta: error.meta,
+            message: error.message
+        });
+        console.error('\n⚠️  Please check your .env file and ensure:');
+        console.error('   - DATABASE_URL is set, OR');
+        console.error('   - PGHOST, PGUSER, PGPASSWORD, PGPORT, PGDATABASE are all set');
+        process.exit(1);
+    }
 }
 
 // Start server with database connection test
 async function startServer() {
-  await testDatabaseConnection();
-  
-  server.listen(port, () => {
-    console.log(`🚀 Server running on http://localhost:${port}`);
-    console.log(`🔌 Socket.IO server ready`);
-    
-    // Start asset cleanup scheduler
-    assetCleanupScheduler.start();
-    console.log(`🧹 Asset cleanup scheduler started`);
-  });
+    await testDatabaseConnection();
+
+    server.listen(port, () => {
+        console.log(`🚀 Server running on http://localhost:${port}`);
+        console.log(`🔌 Socket.IO server ready`);
+
+        // Start asset cleanup scheduler
+        assetCleanupScheduler.start();
+        console.log(`🧹 Asset cleanup scheduler started`);
+    });
 }
 
 startServer().catch((error) => {
-  console.error('❌ Failed to start server:', error);
-  process.exit(1);
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
 });

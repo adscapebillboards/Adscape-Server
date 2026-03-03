@@ -1,87 +1,65 @@
 /**
  * Browser Push Notification service for admin app.
- * Sends push notifications on new campaign, campaign approval, billboard approval, and other admin actions.
+ * Sends push notifications using Firebase Cloud Messaging.
  * Also supports Expo push tokens (React Native).
  */
-const webpush = require('web-push');
+const admin = require('./firebaseAdmin');
 const logger = require('../config/logger');
+const prisma = require('../db/db');
 
-// In-memory store for admin push subscriptions (per browser/device).
-const adminSubscriptions = new Set();
 // Expo push tokens (React Native): { token, email, platform }
 const expoTokens = new Map();
 
-let vapidKeys = null;
-
-function getVapidKeys() {
-  if (vapidKeys) {
-    logger.info('Push: Using cached VAPID keys', { source: vapidKeys._source || 'cached' });
-    return vapidKeys;
-  }
-  const publicKey = process.env.VAPID_PUBLIC_KEY;
-  const privateKey = process.env.VAPID_PRIVATE_KEY;
-  if (publicKey && privateKey) {
-    vapidKeys = { publicKey, privateKey, _source: 'env' };
-    webpush.setVapidDetails(
-      'mailto:admin@billboardhub.com',
-      publicKey,
-      privateKey
-    );
-    logger.info('Push: VAPID keys loaded from env', { publicKeyLength: publicKey.length });
-    return vapidKeys;
-  }
-  vapidKeys = webpush.generateVAPIDKeys();
-  vapidKeys._source = 'auto-generated';
-  webpush.setVapidDetails(
-    'mailto:admin@billboardhub.com',
-    vapidKeys.publicKey,
-    vapidKeys.privateKey
-  );
-  logger.info('Push: VAPID keys auto-generated. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in production.');
-  return vapidKeys;
-}
-
 /**
- * Get public VAPID key for client subscription.
+ * Add an admin push subscription (FCM token).
+ * @param {object} subscription - Object containing fcm token (e.g., {token: '...'} or {endpoint: '...'})
+ * @param {string} [adminEmail] - Optional admin email
  */
-function getPublicKey() {
-  return getVapidKeys().publicKey;
-}
-
-/**
- * Add an admin push subscription (from POST body).
- * @param {object} subscription - PushSubscription JSON object (endpoint, keys)
- */
-function addSubscription(subscription) {
-  if (!subscription || !subscription.endpoint) {
-    logger.warn('Push: addSubscription skipped', { hasSubscription: !!subscription, hasEndpoint: !!subscription?.endpoint });
+async function addSubscription(subscription, adminEmail) {
+  const token = subscription?.token || subscription?.endpoint;
+  if (!token) {
+    logger.warn('Push: addSubscription skipped, no token provided', { subscription });
     return;
   }
-  adminSubscriptions.add(JSON.stringify(subscription));
-  logger.info('Push: admin subscription added', {
-    total: adminSubscriptions.size,
-    endpointPreview: subscription.endpoint.slice(0, 50) + '...',
-  });
+
+  try {
+    await prisma.pushSubscription.upsert({
+      where: { endpoint: token },
+      update: {
+        keys: {}, // empty json to satisfy schema
+        adminEmail: adminEmail || null,
+        createdAt: new Date()
+      },
+      create: {
+        endpoint: token,
+        keys: {},
+        adminEmail: adminEmail || null
+      }
+    });
+
+    logger.info('Push: admin subscription saved to DB', {
+      tokenPreview: token.slice(0, 50) + '...',
+      adminEmail
+    });
+  } catch (err) {
+    logger.error('Push: failed to save subscription to DB', { error: err.message });
+  }
 }
 
 /**
- * Remove a subscription (e.g. on 410/404 from webpush).
+ * Remove a subscription.
  */
-function removeSubscription(subscription) {
-  if (!subscription || !subscription.endpoint) return;
+async function removeSubscription(token) {
+  if (!token) return;
   try {
-    const target = subscription.endpoint;
-    for (const str of adminSubscriptions) {
-      try {
-        const parsed = JSON.parse(str);
-        if (parsed.endpoint === target) {
-          adminSubscriptions.delete(str);
-          return;
-        }
-      } catch (e) { /* skip */ }
-    }
-  } catch (e) {
-    // ignore
+    await prisma.pushSubscription.deleteMany({
+      where: { endpoint: token }
+    });
+    logger.info('Push: removed stale subscription from DB', {
+      tokenPreview: token.slice(0, 50) + '...'
+    });
+  } catch (err) {
+    logger.error('Push: failed to remove stale subscription from DB', { error: err.message });
   }
 }
 
@@ -126,70 +104,77 @@ async function sendExpoPush(tokens, title, body, data) {
 }
 
 /**
- * Send push notification to all admin subscribers.
- * @param {string} title - Notification title
- * @param {string} body - Notification body
- * @param {string} [url] - Optional URL to open on click (e.g. /#/admin or /#/bookings)
+ * Send push notification to all admin subscribers via FCM.
  */
 async function notifyAdmin(title, body, url) {
   logger.info('Push: notifyAdmin called', { title, body: (body || '').slice(0, 80), url });
-  getVapidKeys();
-  const payload = JSON.stringify({
-    title: title || 'BillboardHub Admin',
-    body: body || '',
-    url: url || '/#/admin',
-    icon: '/icon-192.png'
-  });
 
-  const subs = Array.from(adminSubscriptions).map((s) => {
-    try {
-      return JSON.parse(s);
-    } catch (e) {
-      logger.warn('Push: failed to parse stored subscription', { error: e.message });
-      return null;
-    }
-  }).filter(Boolean);
-
-  if (subs.length === 0) {
-    logger.info('Push: no admin subscriptions to notify (admins must enable notifications on /#/admin)');
+  let subs = [];
+  try {
+    subs = await prisma.pushSubscription.findMany();
+  } catch (err) {
+    logger.error('Push: failed to fetch admin subscriptions from DB', { error: err.message });
     return;
   }
 
-  logger.info('Push: sending to subscribers', { count: subs.length, title });
+  if (subs.length > 0) {
+    const tokens = subs.map(sub => sub.endpoint).filter(Boolean);
+    if (tokens.length > 0) {
+      const message = {
+        notification: {
+          title: title || 'BillboardHub Admin',
+          body: body || ''
+        },
+        data: {
+          // Firebase strictly expects string values in data payload
+          url: url || '/#/admin'
+        },
+        tokens: tokens
+      };
 
-  const options = {
-    TTL: 60 * 60 * 24,
-    contentEncoding: 'aes128gcm'
-  };
-
-  const results = await Promise.allSettled(
-    subs.map(async (sub, index) => {
       try {
-        await webpush.sendNotification(sub, payload, options);
-        logger.info('Push: sent OK', { index, endpointPreview: sub.endpoint?.slice(0, 40) + '...' });
-        return { ok: true };
-      } catch (err) {
-        if (err.statusCode === 410 || err.statusCode === 404) {
-          removeSubscription(sub);
-          logger.warn('Push: subscription removed (stale)', { statusCode: err.statusCode, index });
-        } else {
-          logger.warn('Push send failed', {
-            index,
-            statusCode: err.statusCode,
-            message: err.message,
-            body: err.body,
-          });
-        }
-        throw err;
-      }
-    })
-  );
+        const response = await admin.messaging().sendEachForMulticast(message);
+        logger.info('Push: FCM Multicast sent', {
+          successCount: response.successCount,
+          failureCount: response.failureCount
+        });
 
-  const failed = results.filter((r) => r.status === 'rejected').length;
-  if (failed > 0) {
-    logger.info('Push: notifyAdmin done', { total: subs.length, success: subs.length - failed, failed });
+        // Cleanup stale tokens and log details
+        if (response.failureCount > 0) {
+          const failedTokens = [];
+          response.responses.forEach((resp, idx) => {
+            if (!resp.success) {
+              const errorCode = resp.error?.code;
+              const errorMessage = resp.error?.message;
+
+              logger.warn('Push: Token rejected by Firebase details', {
+                index: idx,
+                errorCode,
+                errorMessage,
+                tokenPreview: tokens[idx].slice(0, 30)
+              });
+
+              // Remove tokens that are no longer valid
+              if (
+                errorCode === 'messaging/invalid-registration-token' ||
+                errorCode === 'messaging/registration-token-not-registered' ||
+                errorCode === 'messaging/invalid-argument'
+              ) {
+                failedTokens.push(tokens[idx]);
+              }
+            }
+          });
+
+          for (const staleToken of failedTokens) {
+            await removeSubscription(staleToken);
+          }
+        }
+      } catch (err) {
+        logger.error('Push: FCM Multicast failed', { error: err.message });
+      }
+    }
   } else {
-    logger.info('Push: notified all admins', { count: subs.length });
+    logger.info('Push: no admin FCM subscriptions to notify');
   }
 
   // Also send to Expo (React Native) tokens
@@ -199,6 +184,10 @@ async function notifyAdmin(title, body, url) {
     logger.info('Push: sent to Expo devices', { count: expoTokenList.length });
   }
 }
+
+// Dummy backward compatible exports
+function getPublicKey() { return null; }
+function getVapidKeys() { return null; }
 
 module.exports = {
   getPublicKey,

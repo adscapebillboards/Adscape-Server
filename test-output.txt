@@ -1,0 +1,9 @@
+ℹ️ [INFO] Firebase Admin SDK initialized successfully.
+Testing Admin Push Notification... { hasVapidPublic: true, hasVapidPrivate: true }
+ℹ️ [INFO] Push: notifyAdmin called {
+  title: 'Test Alert: Push Working!',
+  body: 'This is a test push notification sent at 7:31:11 pm',
+  url: '/#/admin'
+}
+ℹ️ [INFO] Push: FCM Multicast sent { successCount: 0, failureCount: 1 }
+Test push trigger complete. Check your browser!

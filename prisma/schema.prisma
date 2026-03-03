@@ -404,5 +404,10 @@ model BMI {
   @@index([userId])
   @@index([userId, timestamp])
 }
-
-
+model PushSubscription { 
+  id          Int      @id @default(autoincrement()) 
+  endpoint    String   @unique 
+  keys        Json 
+  adminEmail  String? 
+  createdAt   DateTime @default(now()) 
+}

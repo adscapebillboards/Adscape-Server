@@ -5,34 +5,30 @@ const roleAuth = require('../middleware/roleAuth');
 const pushService = require('../services/pushNotificationService');
 const logger = require('../config/logger');
 
-// Public: get VAPID public key (needed for client to subscribe)
+// Public: get VAPID public key (stubbed now that we use FCM)
 router.get('/push/vapid-public', (req, res) => {
-  try {
-    logger.info('Push: GET /api/push/vapid-public', { origin: req.get('origin') });
-    const publicKey = pushService.getPublicKey();
-    res.json({ publicKey });
-  } catch (err) {
-    logger.error('Push: Error getting VAPID public key', { error: err.message, stack: err.stack });
-    res.status(500).json({ error: 'Failed to get push config' });
-  }
+  res.json({ publicKey: 'fcm-enabled' });
 });
 
 // Admin only: save push subscription for this browser
-router.post('/push/subscribe', auth, roleAuth(['superadmin']), (req, res) => {
+router.post('/push/subscribe', auth, roleAuth(['superadmin']), async (req, res) => {
   try {
     const subscription = req.body;
     const user = req.user;
+    const token = subscription?.token || subscription?.endpoint;
+
     logger.info('Push: POST /api/push/subscribe', {
       userEmail: user?.email,
       role: user?.role,
-      hasEndpoint: !!subscription?.endpoint,
-      endpointPreview: subscription?.endpoint ? subscription.endpoint.slice(0, 60) + '...' : null,
+      hasToken: !!token,
+      tokenPreview: token ? token.slice(0, 60) + '...' : null,
     });
-    if (!subscription || !subscription.endpoint) {
-      logger.warn('Push: Invalid subscription body', { keys: subscription ? Object.keys(subscription) : [] });
-      return res.status(400).json({ error: 'Invalid subscription: endpoint required' });
+
+    if (!token) {
+      logger.warn('Push: Invalid subscription body, missing token');
+      return res.status(400).json({ error: 'Invalid subscription: token required' });
     }
-    pushService.addSubscription(subscription);
+    await pushService.addSubscription(subscription, user?.email);
     logger.info('Push: Subscription saved successfully');
     res.json({ success: true, message: 'Subscription saved' });
   } catch (err) {
@@ -59,6 +55,25 @@ router.post('/push/subscribe-expo', auth, roleAuth(['superadmin']), (req, res) =
   } catch (err) {
     logger.error('Push: Error saving Expo token', { error: err.message, userEmail: req.user?.email });
     res.status(500).json({ error: 'Failed to save token' });
+  }
+});
+
+// Admin only: test push notifications
+router.get('/push/test', auth, roleAuth(['superadmin']), async (req, res) => {
+  try {
+    const user = req.user;
+    logger.info('Push: GET /api/push/test', { userEmail: user?.email });
+
+    await pushService.notifyAdmin(
+      'Test Alert: Push Working!',
+      `This is a test push notification sent at ${new Date().toLocaleTimeString()} by ${user?.email}`,
+      '/#/admin'
+    );
+
+    res.json({ success: true, message: 'Test notification triggered' });
+  } catch (err) {
+    logger.error('Push: Error triggering test notification', { error: err.message, userEmail: req.user?.email });
+    res.status(500).json({ error: 'Failed to trigger test notification' });
   }
 });
 
