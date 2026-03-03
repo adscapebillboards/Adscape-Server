@@ -56,7 +56,7 @@ router.get('/assets/:screenId', async (req, res) => {
   try {
     const { screenId } = req.params;
     const { date, includeExpiration } = req.query;
-    
+
     // Use provided date or default to today
     const targetDate = date || new Date().toISOString().slice(0, 10);
     const requestTime = new Date().toISOString();
@@ -125,7 +125,7 @@ router.get('/assets/:screenId', async (req, res) => {
     logger.info(`Total assets: ${assets.length}`);
     logger.info(`Response date: ${targetDate}`);
     logger.info(`Response time: ${new Date().toISOString()}`);
-    
+
     if (assets.length > 0) {
       logger.info(`✅ ASSETS FOUND: ${assets.length} assets available for screen ${screenId}`);
       console.info(`[ASSETS] 📥 Asset download paths for screen ${screenId} (${assets.length} total):`);
@@ -168,14 +168,14 @@ router.get('/assets/:screenId', async (req, res) => {
     };
 
     res.json(response);
-    
+
     // Log final summary
     if (assets.length > 0) {
       logger.info(`🎯 FINAL RESULT: Screen ${screenId} received ${assets.length} assets successfully`);
     } else {
       logger.info(`⚠️  FINAL RESULT: Screen ${screenId} received 0 assets - will show default content`);
     }
-    
+
   } catch (err) {
     logger.error('=== ERROR FETCHING ENHANCED ASSETS ===');
     logger.error(`Screen ID: ${req.params.screenId}`);
@@ -189,14 +189,14 @@ router.get('/assets/:screenId', async (req, res) => {
 // Helper function to determine file type from URL
 function getFileType(url) {
   if (!url) return 'unknown';
-  
+
   const extension = url.split('.').pop()?.toLowerCase();
   const imageTypes = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
   const videoTypes = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'flv'];
-  
+
   if (imageTypes.includes(extension)) return 'image';
   if (videoTypes.includes(extension)) return 'video';
-  
+
   return 'unknown';
 }
 
@@ -263,8 +263,8 @@ router.get('/health', (req, res) => {
   logger.info(`Request URL: ${req.originalUrl}`);
   logger.info('===========================');
 
-  const response = { 
-    status: 'ok', 
+  const response = {
+    status: 'ok',
     message: 'Player API is running',
     timestamp: requestTime
   };
@@ -298,7 +298,7 @@ router.post('/trigger-modal/:screenId', async (req, res) => {
 
     // For now, we'll just log it and return success
     logger.info(`✅ Modal trigger request received for screen ${screenId}`);
-    
+
     const response = {
       success: true,
       message: 'Modal trigger request received',
@@ -308,7 +308,7 @@ router.post('/trigger-modal/:screenId', async (req, res) => {
 
     logger.info(`✅ Modal trigger response sent: ${JSON.stringify(response)}`);
     res.json(response);
-    
+
   } catch (err) {
     logger.error('=== ERROR TRIGGERING MODAL ===');
     logger.error(`Screen ID: ${req.params.screenId}`);
@@ -344,7 +344,7 @@ router.get('/modal-status/:screenId', async (req, res) => {
 
     logger.info(`✅ Modal status response sent: ${JSON.stringify(response)}`);
     res.json(response);
-    
+
   } catch (err) {
     logger.error('=== ERROR GETTING MODAL STATUS ===');
     logger.error(`Screen ID: ${req.params.screenId}`);
@@ -358,30 +358,30 @@ router.get('/modal-status/:screenId', async (req, res) => {
 router.post('/test-generate-slots/:campaignId', async (req, res) => {
   try {
     const { campaignId } = req.params;
-    
+
     logger.info('Manual slot generation requested for campaign:', campaignId);
-    
+
     // Fetch the campaign with billboards data
     const campaign = await prisma.campaign.findUnique({
       where: { id: campaignId }
     });
-    
+
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
-    
+
     logger.info('Campaign found:', { id: campaign.id, status: campaign.status });
     logger.info('Campaign billboards:', campaign.billboards);
-    
+
     await generateSlots(campaign);
-    
+
     // Check how many slots were created
     const slotCount = await prisma.generatedSlot.count({
       where: { campaignId: campaignId }
     });
-    
+
     logger.info(`Slots generated successfully. Total slots: ${slotCount}`);
-    res.json({ 
+    res.json({
       message: 'Slots generated successfully',
       campaignId,
       totalSlots: slotCount
@@ -396,12 +396,12 @@ router.post('/test-generate-slots/:campaignId', async (req, res) => {
 router.get('/slots/:campaignId', async (req, res) => {
   try {
     const { campaignId } = req.params;
-    
+
     const slots = await prisma.generatedSlot.findMany({
       where: { campaignId },
       orderBy: { startDate: 'asc' }
     });
-    
+
     res.json({
       campaignId,
       totalSlots: slots.length,
@@ -413,6 +413,26 @@ router.get('/slots/:campaignId', async (req, res) => {
   }
 });
 
+
+// Check 10-digit pairing code
+router.get('/check-pairing/:code', async (req, res) => {
+  try {
+    const { code } = req.params;
+    const billboard = await prisma.billboard.findFirst({
+      where: { screen_id: code }
+    });
+
+    if (billboard) {
+      logger.info(`✅ Pairing code mapped: ${code} to Billboard ${billboard.id}`);
+      res.json({ isPaired: true, billboardId: billboard.id });
+    } else {
+      res.json({ isPaired: false });
+    }
+  } catch (err) {
+    logger.error('Error checking pairing code:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Register or update a player screen
 router.post('/register-screen', async (req, res) => {
