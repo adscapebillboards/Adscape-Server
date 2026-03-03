@@ -24,11 +24,13 @@ if (GOOGLE_CLIENT_ID_ANDROID) {
   GOOGLE_CLIENT_ID_ANDROID = GOOGLE_CLIENT_ID_ANDROID.trim().replace(/^["']|["']$/g, '');
 }
 
-// Support multiple client IDs (web, iOS/other mobile, Android app)
+// Support multiple client IDs (web admin app, React Native app, Android app, legacy)
 const GOOGLE_CLIENT_IDS = [
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_ID_ANDROID,
   '566249475900-jpqs3cjm0n1ikj56mgocsgm6lm2161u5.apps.googleusercontent.com',
+  // Admin web panel client ID (hardcoded in Admin/src/config/googleOAuth.ts)
+  '184953752933-5k7uj0clahs4eh59v0g6tvcgcfotafuh.apps.googleusercontent.com',
 ].filter(Boolean);
 
 // Initialize Google OAuth client (for id_token verification)
@@ -42,7 +44,7 @@ async function verifyGoogleToken(token) {
     // Try to verify with the primary client ID first
     let ticket;
     let payload;
-    
+
     try {
       ticket = await client.verifyIdToken({
         idToken: token,
@@ -52,7 +54,7 @@ async function verifyGoogleToken(token) {
     } catch (primaryError) {
       // If primary fails, try with the React Native client ID
       console.log('Primary client ID verification failed, trying alternative client IDs...');
-      
+
       // Try each client ID in the list
       for (const clientId of GOOGLE_CLIENT_IDS) {
         try {
@@ -69,12 +71,12 @@ async function verifyGoogleToken(token) {
           continue;
         }
       }
-      
+
       if (!payload) {
         throw new Error('Token verification failed with all client IDs');
       }
     }
-    
+
     return {
       googleId: payload.sub,
       email: payload.email,
@@ -216,7 +218,7 @@ router.post('/google/signup', async (req, res) => {
     // Verify Google token
     const googleUser = await verifyGoogleToken(googleToken);
     console.log('Google User Verified:', { email: googleUser.email, name: googleUser.name });
-    
+
     // Check if publisher already exists
     const existingPublisher = await prisma.publisher.findUnique({
       where: { email: googleUser.email }
@@ -241,17 +243,17 @@ router.post('/google/signup', async (req, res) => {
 
     if (existingRegistration) {
       if (existingRegistration.status === 'PENDING') {
-        return res.status(400).json({ 
-          error: 'Registration already pending', 
+        return res.status(400).json({
+          error: 'Registration already pending',
           registrationId: existingRegistration.id,
           status: 'PENDING'
         });
       } else if (existingRegistration.status === 'APPROVED') {
         return res.status(400).json({ error: 'Registration already approved. Please sign in instead.' });
       } else if (existingRegistration.status === 'REJECTED') {
-        return res.status(400).json({ 
-          error: 'Registration was rejected', 
-          rejectionReason: existingRegistration.rejectionReason 
+        return res.status(400).json({
+          error: 'Registration was rejected',
+          rejectionReason: existingRegistration.rejectionReason
         });
       }
     }
@@ -332,7 +334,7 @@ router.post('/google/login', async (req, res) => {
     // Verify Google token
     const googleUser = await verifyGoogleToken(googleToken);
     console.log('Google User Verified:', { email: googleUser.email, name: googleUser.name });
-    
+
     // Find existing publisher
     const publisher = await prisma.publisher.findUnique({
       where: { email: googleUser.email }
@@ -354,8 +356,8 @@ router.post('/google/login', async (req, res) => {
       });
 
       if (pendingRegistration) {
-        return res.status(400).json({ 
-          error: 'Account pending approval', 
+        return res.status(400).json({
+          error: 'Account pending approval',
           registrationId: pendingRegistration.id,
           status: 'PENDING',
           requiresApproval: true
@@ -368,8 +370,8 @@ router.post('/google/login', async (req, res) => {
     // Allow partner role to bypass active check (partners are managed separately)
     if ((publisher.role || 'publisher') !== 'partner') {
       if (publisher.status !== 'active') {
-        return res.status(403).json({ 
-          error: 'Account not approved', 
+        return res.status(403).json({
+          error: 'Account not approved',
           status: publisher.status || 'pending',
           message: 'Your account is pending approval. Please wait for admin approval before logging in.',
           requiresApproval: true,
@@ -397,13 +399,13 @@ router.post('/google/login', async (req, res) => {
       }
     }
     const token = jwt.sign({ id: publisher.id, email: publisher.email, role }, JWT_SECRET, { expiresIn: '30d' });
-    
+
     console.log('Publisher logged in successfully:', { id: publisher.id, email: publisher.email });
-    res.json({ 
-      token, 
-      user: { 
-        id: publisher.id, 
-        email: publisher.email, 
+    res.json({
+      token,
+      user: {
+        id: publisher.id,
+        email: publisher.email,
         name: publisher.name,
         phone: publisher.phone,
         location: publisher.location,
@@ -428,12 +430,12 @@ router.post('/google/login', async (req, res) => {
 router.post('/oauth/complete-profile', async (req, res) => {
   // Handle FormData parsing
   let personalInfo, businessInfo, documents, oauthData;
-  
+
   // Handle JSON data (simplified approach)
   ({ personalInfo, businessInfo, documents, oauthData } = req.body);
 
-  console.log('OAuth Publisher Complete Profile Request:', { 
-    email: personalInfo?.email, 
+  console.log('OAuth Publisher Complete Profile Request:', {
+    email: personalInfo?.email,
     companyName: businessInfo?.companyName,
     oauthData: oauthData ? 'Present' : 'Missing'
   });
@@ -523,11 +525,11 @@ router.post('/oauth/complete-profile', async (req, res) => {
             ]
           }
         });
-        
+
         if (raceConditionCheck) {
           return res.status(400).json({ error: 'Publisher already exists. Please sign in instead.' });
         }
-        
+
         // If it's an ID conflict, this is a database sequence issue
         console.error('Database sequence issue - ID conflict:', createError);
         return res.status(500).json({ error: 'Database error. Please try again or contact support.' });
@@ -563,13 +565,13 @@ router.post('/oauth/complete-profile', async (req, res) => {
     }
 
     console.log('OAuth publisher created successfully:', { id: publisher.id, email: publisher.email });
-    res.json({ 
+    res.json({
       message: 'Publisher profile completed successfully. Your account is pending approval.',
-      publisher 
+      publisher
     });
   } catch (error) {
     console.error('OAuth Publisher Complete Profile Error:', error);
-    
+
     // Handle specific Prisma errors
     if (error.code === 'P2002') {
       const target = error.meta?.target || [];
@@ -589,18 +591,18 @@ router.post('/oauth/complete-profile', async (req, res) => {
             ]
           }
         });
-        
+
         if (checkPublisher) {
           return res.status(400).json({ error: 'Publisher already exists. Please sign in instead.' });
         }
-        
+
         console.error('Database sequence sync issue detected. Publisher ID conflict.');
-        return res.status(500).json({ 
-          error: 'A database error occurred. Please try again in a moment. If the problem persists, contact support.' 
+        return res.status(500).json({
+          error: 'A database error occurred. Please try again in a moment. If the problem persists, contact support.'
         });
       }
     }
-    
+
     // Handle other errors
     const errorMessage = error.message || 'Unknown error occurred';
     res.status(500).json({ error: `Failed to complete publisher profile: ${errorMessage}` });
@@ -611,7 +613,7 @@ router.post('/oauth/complete-profile', async (req, res) => {
 router.get('/status/:email', async (req, res) => {
   try {
     const { email } = req.params;
-    
+
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
@@ -628,7 +630,7 @@ router.get('/status/:email', async (req, res) => {
     });
 
     if (!publisher) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: 'Publisher not found',
         status: 'UNKNOWN'
       });
@@ -695,7 +697,7 @@ router.get('/', auth, async (req, res) => {
       website: publisher.website,
       role: publisher.role
     }));
-    
+
     logger.info('Publishers fetched', `Count: ${formattedPublishers.length}`);
     res.json({ publishers: formattedPublishers });
   } catch (error) {
@@ -711,7 +713,7 @@ router.get('/:id', auth, async (req, res) => {
     const publisher = await prisma.publisher.findUnique({
       where: { id: parseInt(id) }
     });
-    
+
     if (!publisher) {
       return res.status(404).json({ error: 'Publisher not found' });
     }
@@ -776,7 +778,7 @@ router.get('/:id', auth, async (req, res) => {
       billboards: formattedBillboards,
       payments: payments
     };
-    
+
     logger.info('Publisher details fetched', `Publisher ID: ${id}, Billboards: ${billboards.length}, Payments: ${payments.length}`);
     res.json({ publisher: publisherDetails });
   } catch (error) {
@@ -839,11 +841,11 @@ router.put('/:id', auth, roleAuth(['superadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
-    
+
     // Remove fields that shouldn't be updated
     delete updateData.id;
     delete updateData.password;
-    
+
     const publisher = await prisma.publisher.update({
       where: { id: parseInt(id) },
       data: updateData
@@ -860,7 +862,7 @@ router.put('/:id', auth, roleAuth(['superadmin']), async (req, res) => {
 router.delete('/:id', auth, roleAuth(['superadmin']), async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const publisher = await prisma.publisher.update({
       where: { id: parseInt(id) },
       data: { status: 'inactive' }
