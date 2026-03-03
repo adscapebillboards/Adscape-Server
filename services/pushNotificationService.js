@@ -121,14 +121,19 @@ async function notifyAdmin(title, body, url) {
     const tokens = subs.map(sub => sub.endpoint).filter(Boolean);
     if (tokens.length > 0) {
       const message = {
-        notification: {
-          title: title || 'BillboardHub Admin',
-          body: body || ''
-        },
+        // Data-only payload: no `notification` field.
+        // This ensures our SW's onBackgroundMessage handler runs and controls
+        // the notification display (icon, body, click URL). If `notification`
+        // is present, Chrome auto-displays with default UI ignoring our icon/URL.
         data: {
-          // Firebase strictly expects string values in data payload
-          url: url || '/#/admin'
+          title: title || 'BillboardHub Admin',
+          body: body || '',
+          url: url || '/#/admin',
+          tag: 'adscape-push'
         },
+        // High priority so the SW is woken on Android and web browsers
+        android: { priority: 'high' },
+        webpush: { headers: { Urgency: 'high' } },
         tokens: tokens
       };
 

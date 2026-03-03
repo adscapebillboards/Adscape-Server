@@ -64,7 +64,7 @@ let io;
 
 if (!isServerless) {
   server = http.createServer(app);
-  
+
   // then attach Socket.IO to it
   io = new Server(server, {
     cors: {
@@ -75,23 +75,23 @@ if (!isServerless) {
     transports: ['websocket', 'polling'],
     allowEIO3: true
   });
-  
+
   // Socket.IO connection handling
   io.on('connection', (socket) => {
     logger.info('Socket.IO client connected:', socket.id);
-    
+
     socket.on('disconnect', () => {
       logger.info('Socket.IO client disconnected:', socket.id);
     });
   });
-  
+
   logger.info('Socket.IO server initialized');
 } else {
   logger.info('Socket.IO disabled - running in serverless environment');
   // Create a mock io object for compatibility
   io = {
     emit: () => { logger.warn('Socket.IO emit called but Socket.IO is disabled in serverless environment'); },
-    to: () => ({ emit: () => {} }),
+    to: () => ({ emit: () => { } }),
     sockets: { adapter: { rooms: new Map() }, sockets: new Map() },
     engine: null // Mark as unavailable
   };
@@ -161,7 +161,10 @@ app.use(cors({
   ],
   exposedHeaders: ['Content-Length', 'Content-Type', 'Authorization'],
   preflightContinue: false,
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
+  // Critical: Vary: Origin ensures browsers/CDNs cache CORS responses per-origin.
+  // Without this, a cached 304 for adscape.co.in can incorrectly be served to admin.adscape.co.in.
+  vary: true
 }));
 
 // Request logging middleware
@@ -182,7 +185,7 @@ app.use('/socket.io/', (req, res, next) => {
   // If Socket.IO is not available (serverless), return helpful error instead of 400
   if (!ioInstance || !ioInstance.engine) {
     logger.warn('Socket.IO request received but Socket.IO is not available (serverless environment)');
-    return res.status(503).json({ 
+    return res.status(503).json({
       error: 'Socket.IO is not available',
       message: 'WebSocket connections require persistent connections. In serverless environments, please use HTTP polling or REST API endpoints.',
       alternative: 'Use HTTP polling or REST API endpoints for real-time updates'
@@ -197,7 +200,7 @@ app.use('/socket.io/', (req, res, next) => {
   // If Socket.IO is not available (serverless), return helpful error
   const io = app.get('io');
   if (!io || !io.engine) {
-    return res.status(503).json({ 
+    return res.status(503).json({
       error: 'Socket.IO is not available',
       message: 'WebSocket connections require persistent connections. In serverless environments, please use HTTP polling or REST API endpoints.',
       alternative: 'Use HTTP polling or REST API endpoints for real-time updates'
@@ -211,8 +214,8 @@ app.post('/api/scheduler/start', (req, res) => {
   try {
     const { intervalMinutes = 15 } = req.body;
     campaignStatusScheduler.start(intervalMinutes);
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: `Scheduler started with ${intervalMinutes} minute interval`,
       status: campaignStatusScheduler.getStatus()
     });
@@ -225,8 +228,8 @@ app.post('/api/scheduler/start', (req, res) => {
 app.post('/api/scheduler/stop', (req, res) => {
   try {
     campaignStatusScheduler.stop();
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Scheduler stopped',
       status: campaignStatusScheduler.getStatus()
     });
@@ -238,8 +241,8 @@ app.post('/api/scheduler/stop', (req, res) => {
 
 app.get('/api/scheduler/status', (req, res) => {
   try {
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       status: campaignStatusScheduler.getStatus()
     });
   } catch (error) {
@@ -251,8 +254,8 @@ app.get('/api/scheduler/status', (req, res) => {
 app.post('/api/scheduler/run', async (req, res) => {
   try {
     const result = await campaignStatusScheduler.runImmediate();
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Manual scheduler run completed',
       data: result
     });
@@ -403,319 +406,319 @@ if (process.env.DISABLE_AUTO_SCHEDULER !== 'true' && !isServerless) {
 const bmiStore = new Map();
 
 function computeBMI(heightCm, weightKg) {
-    const h = Number(heightCm);
-    const w = Number(weightKg);
-    if (!h || !w) return { bmi: null, category: 'invalid' };
-    const heightM = h / 100;
-    const bmi = Number((w / (heightM * heightM)).toFixed(1));
-    let category = 'Normal';
-    if (bmi < 18.5) category = 'Underweight';
-    else if (bmi < 25) category = 'Normal';
-    else if (bmi < 30) category = 'Overweight';
-    else category = 'Obese';
-    return { bmi, category };
+  const h = Number(heightCm);
+  const w = Number(weightKg);
+  if (!h || !w) return { bmi: null, category: 'invalid' };
+  const heightM = h / 100;
+  const bmi = Number((w / (heightM * heightM)).toFixed(1));
+  let category = 'Normal';
+  if (bmi < 18.5) category = 'Underweight';
+  else if (bmi < 25) category = 'Normal';
+  else if (bmi < 30) category = 'Overweight';
+  else category = 'Obese';
+  return { bmi, category };
 }
 
 async function generateFortuneMessage(bmiData) {
-    try {
-        const grokApiKey = process.env.GROK_API_KEY;
-        if (!grokApiKey) {
-            return generateFallbackFortune(bmiData);
-        }
-        const prompt = `Generate a positive, motivational fortune cookie message for someone with BMI ${bmiData.bmi} (${bmiData.category}). Keep it short (1-2 sentences), uplifting, and health-focused. Don't mention specific BMI numbers.`;
-        const response = await axios.post('https://api.x.ai/v1/chat/completions', {
-            model: 'grok-beta',
-            messages: [{ role: 'user', content: prompt }],
-            max_tokens: 100,
-            temperature: 0.8
-        }, {
-            headers: {
-                'Authorization': `Bearer ${grokApiKey}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        const message = response.data.choices[0]?.message?.content?.trim();
-        return message || generateFallbackFortune(bmiData);
-    } catch (error) {
-        return generateFallbackFortune(bmiData);
+  try {
+    const grokApiKey = process.env.GROK_API_KEY;
+    if (!grokApiKey) {
+      return generateFallbackFortune(bmiData);
     }
+    const prompt = `Generate a positive, motivational fortune cookie message for someone with BMI ${bmiData.bmi} (${bmiData.category}). Keep it short (1-2 sentences), uplifting, and health-focused. Don't mention specific BMI numbers.`;
+    const response = await axios.post('https://api.x.ai/v1/chat/completions', {
+      model: 'grok-beta',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 100,
+      temperature: 0.8
+    }, {
+      headers: {
+        'Authorization': `Bearer ${grokApiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    const message = response.data.choices[0]?.message?.content?.trim();
+    return message || generateFallbackFortune(bmiData);
+  } catch (error) {
+    return generateFallbackFortune(bmiData);
+  }
 }
 
 function generateFallbackFortune(bmiData) {
-    const fortunes = [
-        "Your journey to wellness is a beautiful adventure. Every step forward is progress worth celebrating.",
-        "Health is not just about numbers, but about feeling strong and confident in your own skin.",
-        "Small, consistent changes lead to big transformations. You're already on the right path.",
-        "Your body is your temple. Treat it with love, respect, and gentle care every day."
-    ];
-    return fortunes[Math.floor(Math.random() * fortunes.length)];
+  const fortunes = [
+    "Your journey to wellness is a beautiful adventure. Every step forward is progress worth celebrating.",
+    "Health is not just about numbers, but about feeling strong and confident in your own skin.",
+    "Small, consistent changes lead to big transformations. You're already on the right path.",
+    "Your body is your temple. Treat it with love, respect, and gentle care every day."
+  ];
+  return fortunes[Math.floor(Math.random() * fortunes.length)];
 }
 
 // Calculate streak helper
 function calculateStreak(bmiRecords) {
-    if (!bmiRecords || bmiRecords.length === 0) return { currentStreak: 0, longestStreak: 0, isActive: false };
-    const sortedRecords = bmiRecords.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    let currentStreak = 0, longestStreak = 0, tempStreak = 0, isActive = false;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const recordsByDate = new Map();
-    sortedRecords.forEach(record => {
-        const dateKey = new Date(record.timestamp);
-        dateKey.setHours(0, 0, 0, 0);
-        const dateString = dateKey.toISOString().split('T')[0];
-        if (!recordsByDate.has(dateString)) recordsByDate.set(dateString, record);
-    });
-    const uniqueDates = Array.from(recordsByDate.keys()).sort().reverse();
-    if (uniqueDates.length === 0) return { currentStreak: 0, longestStreak: 0, isActive: false };
-    const mostRecentDate = new Date(uniqueDates[0]);
-    const daysDiff = Math.floor((today - mostRecentDate) / (1000 * 60 * 60 * 24));
-    if (daysDiff <= 1) {
-        isActive = true;
-        currentStreak = 1;
-        for (let i = 1; i < uniqueDates.length; i++) {
-            const currentDate = new Date(uniqueDates[i]);
-            const prevDate = new Date(uniqueDates[i - 1]);
-            const diff = Math.floor((prevDate - currentDate) / (1000 * 60 * 60 * 24));
-            if (diff === 1) currentStreak++; else break;
-        }
-    }
-    tempStreak = 1;
-    longestStreak = 1;
+  if (!bmiRecords || bmiRecords.length === 0) return { currentStreak: 0, longestStreak: 0, isActive: false };
+  const sortedRecords = bmiRecords.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  let currentStreak = 0, longestStreak = 0, tempStreak = 0, isActive = false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const recordsByDate = new Map();
+  sortedRecords.forEach(record => {
+    const dateKey = new Date(record.timestamp);
+    dateKey.setHours(0, 0, 0, 0);
+    const dateString = dateKey.toISOString().split('T')[0];
+    if (!recordsByDate.has(dateString)) recordsByDate.set(dateString, record);
+  });
+  const uniqueDates = Array.from(recordsByDate.keys()).sort().reverse();
+  if (uniqueDates.length === 0) return { currentStreak: 0, longestStreak: 0, isActive: false };
+  const mostRecentDate = new Date(uniqueDates[0]);
+  const daysDiff = Math.floor((today - mostRecentDate) / (1000 * 60 * 60 * 24));
+  if (daysDiff <= 1) {
+    isActive = true;
+    currentStreak = 1;
     for (let i = 1; i < uniqueDates.length; i++) {
-        const currentDate = new Date(uniqueDates[i]);
-        const prevDate = new Date(uniqueDates[i - 1]);
-        const diff = Math.floor((prevDate - currentDate) / (1000 * 60 * 60 * 24));
-        if (diff === 1) tempStreak++; else { longestStreak = Math.max(longestStreak, tempStreak); tempStreak = 1; }
+      const currentDate = new Date(uniqueDates[i]);
+      const prevDate = new Date(uniqueDates[i - 1]);
+      const diff = Math.floor((prevDate - currentDate) / (1000 * 60 * 60 * 24));
+      if (diff === 1) currentStreak++; else break;
     }
-    longestStreak = Math.max(longestStreak, tempStreak);
-    return { currentStreak, longestStreak, isActive };
+  }
+  tempStreak = 1;
+  longestStreak = 1;
+  for (let i = 1; i < uniqueDates.length; i++) {
+    const currentDate = new Date(uniqueDates[i]);
+    const prevDate = new Date(uniqueDates[i - 1]);
+    const diff = Math.floor((prevDate - currentDate) / (1000 * 60 * 60 * 24));
+    if (diff === 1) tempStreak++; else { longestStreak = Math.max(longestStreak, tempStreak); tempStreak = 1; }
+  }
+  longestStreak = Math.max(longestStreak, tempStreak);
+  return { currentStreak, longestStreak, isActive };
 }
 
 // POST /api/bmi
 app.post('/api/bmi', async (req, res) => {
+  try {
+    const { heightCm, weightKg, screenId, appVersion } = req.body || {};
+    if (!heightCm || !weightKg || !screenId) return res.status(400).json({ error: 'heightCm, weightKg, screenId required' });
+
+    // Get the registered player's flow type from database
+    let playerFlowType = null;
     try {
-        const { heightCm, weightKg, screenId, appVersion } = req.body || {};
-        if (!heightCm || !weightKg || !screenId) return res.status(400).json({ error: 'heightCm, weightKg, screenId required' });
-        
-        // Get the registered player's flow type from database
-        let playerFlowType = null;
-        try {
-            const player = await prisma.adscapePlayer.findUnique({ where: { screenId: String(screenId) } });
-            playerFlowType = player?.flowType;
-            logger.info('[BMI] Player found in DB:', { screenId, flowType: playerFlowType, appVersion: player?.appVersion });
-        } catch (e) { 
-            logger.warn('[BMI] Could not fetch player flow type:', e.message); 
-        }
-        
-        // Determine effective flow type: DB flowType > request appVersion > default 'f1'
-        const effectiveFlowType = playerFlowType || appVersion || 'f1';
-        logger.info('[BMI] Flow determination:', { 
-            playerFlowType, 
-            requestAppVersion: appVersion, 
-            effectiveFlowType 
-        });
-        
-        const { bmi, category } = computeBMI(heightCm, weightKg);
-        const bmiId = uuidv4();
-        const timestamp = new Date().toISOString();
-        
-        // Generate fortune for F2 flow only (F1 generates after payment)
-        const fortune = (effectiveFlowType === 'F2' || effectiveFlowType === 'f2') ? await generateFortuneMessage({ bmi, category }) : null;
-        logger.info('[BMI] Fortune generation:', { effectiveFlowType, fortuneGenerated: !!fortune });
-        
-        const payload = { 
-            bmiId, 
-            screenId: String(screenId), 
-            height: Number(heightCm), 
-            weight: Number(weightKg), 
-            bmi, 
-            category, 
-            timestamp, 
-            fortune,
-            flowType: effectiveFlowType // Include flowType in payload
-        };
-        bmiStore.set(bmiId, payload);
-        
-        await prisma.screen.upsert({ where: { id: String(screenId) }, create: { id: String(screenId) }, update: {} });
-        await prisma.bMI.create({ 
-            data: { 
-                id: bmiId, 
-                screenId: String(screenId), 
-                heightCm: Number(heightCm), 
-                weightKg: Number(weightKg), 
-                bmi: Number(bmi), 
-                category, 
-                timestamp: new Date(timestamp), 
-                deviceId: req.body.deviceId || null, 
-                appVersion: effectiveFlowType, // Store effective flow type
-                location: req.body.location || null, 
-                fortune: fortune 
-            } 
-        });
-        
-        const clientBase = process.env.CLIENT_BASE_URL || 'https://bmi-client.onrender.com';
-        const inferredProto = (req.headers['x-forwarded-proto'] || '').toString().split(',')[0] || req.protocol;
-        const apiBase = process.env.API_PUBLIC_BASE || `${inferredProto}://${req.get('host')}`;
-        const version = effectiveFlowType.toLowerCase();
-        const webUrl = `${clientBase}?screenId=${encodeURIComponent(String(screenId))}&bmiId=${encodeURIComponent(bmiId)}&appVersion=${encodeURIComponent(version)}#server=${encodeURIComponent(apiBase)}`;
-        
-        const emitPayload = { 
-            ...payload, 
-            webUrl,
-            appVersion: effectiveFlowType // Explicitly include for Android app
-        };
-        
-        const io = app.get('io');
-        if (io) {
-            io.to(`screen:${String(screenId)}`).emit('bmi-data-received', emitPayload);
-            logger.info('[BMI] Emitted to Android:', { 
-                room: `screen:${String(screenId)}`, 
-                bmiId, 
-                flowType: effectiveFlowType,
-                hasWebUrl: !!webUrl
-            });
-        } else {
-            logger.warn('[BMI] Socket.IO not available, cannot emit to Android');
-        }
-        
-        return res.status(201).json({ ok: true, bmiId, webUrl, flowType: effectiveFlowType });
-    } catch (e) { 
-        logger.error('[BMI] POST /api/bmi error', e); 
-        return res.status(500).json({ error: 'internal_error' }); 
+      const player = await prisma.adscapePlayer.findUnique({ where: { screenId: String(screenId) } });
+      playerFlowType = player?.flowType;
+      logger.info('[BMI] Player found in DB:', { screenId, flowType: playerFlowType, appVersion: player?.appVersion });
+    } catch (e) {
+      logger.warn('[BMI] Could not fetch player flow type:', e.message);
     }
+
+    // Determine effective flow type: DB flowType > request appVersion > default 'f1'
+    const effectiveFlowType = playerFlowType || appVersion || 'f1';
+    logger.info('[BMI] Flow determination:', {
+      playerFlowType,
+      requestAppVersion: appVersion,
+      effectiveFlowType
+    });
+
+    const { bmi, category } = computeBMI(heightCm, weightKg);
+    const bmiId = uuidv4();
+    const timestamp = new Date().toISOString();
+
+    // Generate fortune for F2 flow only (F1 generates after payment)
+    const fortune = (effectiveFlowType === 'F2' || effectiveFlowType === 'f2') ? await generateFortuneMessage({ bmi, category }) : null;
+    logger.info('[BMI] Fortune generation:', { effectiveFlowType, fortuneGenerated: !!fortune });
+
+    const payload = {
+      bmiId,
+      screenId: String(screenId),
+      height: Number(heightCm),
+      weight: Number(weightKg),
+      bmi,
+      category,
+      timestamp,
+      fortune,
+      flowType: effectiveFlowType // Include flowType in payload
+    };
+    bmiStore.set(bmiId, payload);
+
+    await prisma.screen.upsert({ where: { id: String(screenId) }, create: { id: String(screenId) }, update: {} });
+    await prisma.bMI.create({
+      data: {
+        id: bmiId,
+        screenId: String(screenId),
+        heightCm: Number(heightCm),
+        weightKg: Number(weightKg),
+        bmi: Number(bmi),
+        category,
+        timestamp: new Date(timestamp),
+        deviceId: req.body.deviceId || null,
+        appVersion: effectiveFlowType, // Store effective flow type
+        location: req.body.location || null,
+        fortune: fortune
+      }
+    });
+
+    const clientBase = process.env.CLIENT_BASE_URL || 'https://bmi-client.onrender.com';
+    const inferredProto = (req.headers['x-forwarded-proto'] || '').toString().split(',')[0] || req.protocol;
+    const apiBase = process.env.API_PUBLIC_BASE || `${inferredProto}://${req.get('host')}`;
+    const version = effectiveFlowType.toLowerCase();
+    const webUrl = `${clientBase}?screenId=${encodeURIComponent(String(screenId))}&bmiId=${encodeURIComponent(bmiId)}&appVersion=${encodeURIComponent(version)}#server=${encodeURIComponent(apiBase)}`;
+
+    const emitPayload = {
+      ...payload,
+      webUrl,
+      appVersion: effectiveFlowType // Explicitly include for Android app
+    };
+
+    const io = app.get('io');
+    if (io) {
+      io.to(`screen:${String(screenId)}`).emit('bmi-data-received', emitPayload);
+      logger.info('[BMI] Emitted to Android:', {
+        room: `screen:${String(screenId)}`,
+        bmiId,
+        flowType: effectiveFlowType,
+        hasWebUrl: !!webUrl
+      });
+    } else {
+      logger.warn('[BMI] Socket.IO not available, cannot emit to Android');
+    }
+
+    return res.status(201).json({ ok: true, bmiId, webUrl, flowType: effectiveFlowType });
+  } catch (e) {
+    logger.error('[BMI] POST /api/bmi error', e);
+    return res.status(500).json({ error: 'internal_error' });
+  }
 });
 
 // POST /api/user
 app.post('/api/user', async (req, res) => {
-    try {
-        const { name, mobile } = req.body || {};
-        if (!name || !mobile) return res.status(400).json({ error: 'name, mobile required' });
-        let user = await prisma.userBMI.findFirst({ where: { mobile: String(mobile) } });
-        if (!user) user = await prisma.userBMI.create({ data: { name: String(name), mobile: String(mobile) } });
-        return res.json({ userId: user.id, name: user.name, mobile: user.mobile });
-    } catch (e) { logger.error('[USER] POST /api/user error', e); return res.status(500).json({ error: 'internal_error' }); }
+  try {
+    const { name, mobile } = req.body || {};
+    if (!name || !mobile) return res.status(400).json({ error: 'name, mobile required' });
+    let user = await prisma.userBMI.findFirst({ where: { mobile: String(mobile) } });
+    if (!user) user = await prisma.userBMI.create({ data: { name: String(name), mobile: String(mobile) } });
+    return res.json({ userId: user.id, name: user.name, mobile: user.mobile });
+  } catch (e) { logger.error('[USER] POST /api/user error', e); return res.status(500).json({ error: 'internal_error' }); }
 });
 
 // POST /api/payment-success
 app.post('/api/payment-success', async (req, res) => {
-    try {
-        const { userId, bmiId, appVersion } = req.body || {};
-        if (!userId || !bmiId) return res.status(400).json({ error: 'userId, bmiId required' });
-        const updatedBMI = await prisma.bMI.update({ where: { id: bmiId }, data: { userId: userId }, include: { user: true, screen: true } });
-        if (appVersion !== 'f2') {
-            logger.info('[PAYMENT] F1 Flow: Generating fortune immediately');
-            const fortuneMessage = await generateFortuneMessage({ bmi: updatedBMI.bmi, category: updatedBMI.category });
-            await prisma.bMI.update({ where: { id: bmiId }, data: { fortune: fortuneMessage } });
-            logger.info('[PAYMENT] F1 Flow: Fortune generated and stored:', fortuneMessage);
-        }
-        const io = app.get('io');
-        if (appVersion !== 'f2' && io) {
-            io.to(`screen:${updatedBMI.screenId}`).emit('payment-success', { bmiId: updatedBMI.id, screenId: updatedBMI.screenId, userId: updatedBMI.userId, user: updatedBMI.user, bmi: updatedBMI.bmi, category: updatedBMI.category, height: updatedBMI.heightCm, weight: updatedBMI.weightKg, timestamp: updatedBMI.timestamp.toISOString() });
-            logger.info('[PAYMENT] Success emitted to screen:', updatedBMI.screenId);
-        } else logger.info('[PAYMENT] F2 version - skipping socket emission to Android');
-        return res.json({ ok: true, message: 'Payment processed successfully' });
-    } catch (e) { logger.error('[PAYMENT] POST /api/payment-success error', e); return res.status(500).json({ error: 'internal_error' }); }
+  try {
+    const { userId, bmiId, appVersion } = req.body || {};
+    if (!userId || !bmiId) return res.status(400).json({ error: 'userId, bmiId required' });
+    const updatedBMI = await prisma.bMI.update({ where: { id: bmiId }, data: { userId: userId }, include: { user: true, screen: true } });
+    if (appVersion !== 'f2') {
+      logger.info('[PAYMENT] F1 Flow: Generating fortune immediately');
+      const fortuneMessage = await generateFortuneMessage({ bmi: updatedBMI.bmi, category: updatedBMI.category });
+      await prisma.bMI.update({ where: { id: bmiId }, data: { fortune: fortuneMessage } });
+      logger.info('[PAYMENT] F1 Flow: Fortune generated and stored:', fortuneMessage);
+    }
+    const io = app.get('io');
+    if (appVersion !== 'f2' && io) {
+      io.to(`screen:${updatedBMI.screenId}`).emit('payment-success', { bmiId: updatedBMI.id, screenId: updatedBMI.screenId, userId: updatedBMI.userId, user: updatedBMI.user, bmi: updatedBMI.bmi, category: updatedBMI.category, height: updatedBMI.heightCm, weight: updatedBMI.weightKg, timestamp: updatedBMI.timestamp.toISOString() });
+      logger.info('[PAYMENT] Success emitted to screen:', updatedBMI.screenId);
+    } else logger.info('[PAYMENT] F2 version - skipping socket emission to Android');
+    return res.json({ ok: true, message: 'Payment processed successfully' });
+  } catch (e) { logger.error('[PAYMENT] POST /api/payment-success error', e); return res.status(500).json({ error: 'internal_error' }); }
 });
 
 // POST /api/progress-start
 app.post('/api/progress-start', async (req, res) => {
-    try {
-        const { bmiId } = req.body || {};
-        if (!bmiId) return res.status(400).json({ error: 'bmiId required' });
-        const bmiData = await prisma.bMI.findUnique({ where: { id: bmiId }, include: { user: true, screen: true } });
-        if (!bmiData) return res.status(404).json({ error: 'BMI data not found' });
-        const io = app.get('io');
-        if (io) io.to(`screen:${bmiData.screenId}`).emit('progress-start', { bmiId: bmiData.id, screenId: bmiData.screenId, userId: bmiData.userId, user: bmiData.user, bmi: bmiData.bmi, category: bmiData.category, height: bmiData.heightCm, weight: bmiData.weightKg, timestamp: bmiData.timestamp.toISOString(), progressComplete: true });
-        logger.info('[PROGRESS] Start emitted to screen:', bmiData.screenId);
-        return res.json({ ok: true, message: 'Progress started' });
-    } catch (e) { logger.error('[PROGRESS] POST /api/progress-start error', e); return res.status(500).json({ error: 'internal_error' }); }
+  try {
+    const { bmiId } = req.body || {};
+    if (!bmiId) return res.status(400).json({ error: 'bmiId required' });
+    const bmiData = await prisma.bMI.findUnique({ where: { id: bmiId }, include: { user: true, screen: true } });
+    if (!bmiData) return res.status(404).json({ error: 'BMI data not found' });
+    const io = app.get('io');
+    if (io) io.to(`screen:${bmiData.screenId}`).emit('progress-start', { bmiId: bmiData.id, screenId: bmiData.screenId, userId: bmiData.userId, user: bmiData.user, bmi: bmiData.bmi, category: bmiData.category, height: bmiData.heightCm, weight: bmiData.weightKg, timestamp: bmiData.timestamp.toISOString(), progressComplete: true });
+    logger.info('[PROGRESS] Start emitted to screen:', bmiData.screenId);
+    return res.json({ ok: true, message: 'Progress started' });
+  } catch (e) { logger.error('[PROGRESS] POST /api/progress-start error', e); return res.status(500).json({ error: 'internal_error' }); }
 });
 
 // POST /api/fortune-generate
 app.post('/api/fortune-generate', async (req, res) => {
-    try {
-        const { bmiId, appVersion } = req.body || {};
-        logger.info('[FORTUNE] Request body:', req.body);
-        if (!bmiId) return res.status(400).json({ error: 'bmiId required' });
-        const bmiData = await prisma.bMI.findUnique({ where: { id: bmiId }, include: { user: true, screen: true } });
-        if (!bmiData) return res.status(404).json({ error: 'BMI data not found' });
-        let fortuneMessage = bmiData.fortune;
-        if (!fortuneMessage) {
-            logger.info('[FORTUNE] No existing fortune, generating new one');
-            fortuneMessage = await generateFortuneMessage({ bmi: bmiData.bmi, category: bmiData.category });
-            await prisma.bMI.update({ where: { id: bmiId }, data: { fortune: fortuneMessage } });
-        } else logger.info('[FORTUNE] Using existing fortune from database');
-        const fortuneData = { bmiId: bmiData.id, screenId: bmiData.screenId, userId: bmiData.userId, user: bmiData.user, bmi: bmiData.bmi, category: bmiData.category, height: bmiData.heightCm, weight: bmiData.weightKg, timestamp: bmiData.timestamp.toISOString(), fortuneMessage: fortuneMessage };
-        const io = app.get('io');
-        if (appVersion !== 'f2' && io) {
-            io.to(`screen:${bmiData.screenId}`).emit('fortune-ready', fortuneData);
-            logger.info('[FORTUNE] Generated and emitted to screen:', bmiData.screenId);
-        } else logger.info('[FORTUNE] F2 version - skipping socket emission to Android');
-        return res.json({ ok: true, fortuneMessage, data: fortuneData });
-    } catch (e) { logger.error('[FORTUNE] POST /api/fortune-generate error', e); return res.status(500).json({ error: 'internal_error' }); }
+  try {
+    const { bmiId, appVersion } = req.body || {};
+    logger.info('[FORTUNE] Request body:', req.body);
+    if (!bmiId) return res.status(400).json({ error: 'bmiId required' });
+    const bmiData = await prisma.bMI.findUnique({ where: { id: bmiId }, include: { user: true, screen: true } });
+    if (!bmiData) return res.status(404).json({ error: 'BMI data not found' });
+    let fortuneMessage = bmiData.fortune;
+    if (!fortuneMessage) {
+      logger.info('[FORTUNE] No existing fortune, generating new one');
+      fortuneMessage = await generateFortuneMessage({ bmi: bmiData.bmi, category: bmiData.category });
+      await prisma.bMI.update({ where: { id: bmiId }, data: { fortune: fortuneMessage } });
+    } else logger.info('[FORTUNE] Using existing fortune from database');
+    const fortuneData = { bmiId: bmiData.id, screenId: bmiData.screenId, userId: bmiData.userId, user: bmiData.user, bmi: bmiData.bmi, category: bmiData.category, height: bmiData.heightCm, weight: bmiData.weightKg, timestamp: bmiData.timestamp.toISOString(), fortuneMessage: fortuneMessage };
+    const io = app.get('io');
+    if (appVersion !== 'f2' && io) {
+      io.to(`screen:${bmiData.screenId}`).emit('fortune-ready', fortuneData);
+      logger.info('[FORTUNE] Generated and emitted to screen:', bmiData.screenId);
+    } else logger.info('[FORTUNE] F2 version - skipping socket emission to Android');
+    return res.json({ ok: true, fortuneMessage, data: fortuneData });
+  } catch (e) { logger.error('[FORTUNE] POST /api/fortune-generate error', e); return res.status(500).json({ error: 'internal_error' }); }
 });
 
 // GET /api/user/:userId/analytics
 app.get('/api/user/:userId/analytics', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const bmiRecords = await prisma.bMI.findMany({ where: { userId: userId }, orderBy: { timestamp: 'desc' }, include: { screen: true } });
-        if (bmiRecords.length === 0) return res.json({ totalRecords: 0, recentBMI: null, streak: { currentStreak: 0, longestStreak: 0, isActive: false }, trends: [], categoryDistribution: {}, averageBMI: 0 });
-        const streak = calculateStreak(bmiRecords);
-        const recentBMI = { id: bmiRecords[0].id, bmi: bmiRecords[0].bmi, category: bmiRecords[0].category, height: bmiRecords[0].heightCm, weight: bmiRecords[0].weightKg, timestamp: bmiRecords[0].timestamp.toISOString(), screenId: bmiRecords[0].screenId, deviceId: bmiRecords[0].deviceId, location: bmiRecords[0].location, fortune: bmiRecords[0].fortune };
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const recentRecords = bmiRecords.filter(record => new Date(record.timestamp) >= thirtyDaysAgo);
-        const trends = recentRecords.map(record => ({ date: record.timestamp.toISOString().split('T')[0], bmi: record.bmi, weight: record.weightKg, category: record.category })).reverse();
-        const categoryDistribution = {};
-        bmiRecords.forEach(record => { categoryDistribution[record.category] = (categoryDistribution[record.category] || 0) + 1; });
-        const averageBMI = Number((bmiRecords.reduce((sum, record) => sum + record.bmi, 0) / bmiRecords.length).toFixed(1));
-        return res.json({ totalRecords: bmiRecords.length, recentBMI, streak, trends, categoryDistribution, averageBMI, firstRecord: bmiRecords[bmiRecords.length - 1].timestamp.toISOString(), lastRecord: bmiRecords[0].timestamp.toISOString() });
-    } catch (e) { logger.error('[ANALYTICS] GET /api/user/:userId/analytics error', e); return res.status(500).json({ error: 'internal_error' }); }
+  try {
+    const { userId } = req.params;
+    const bmiRecords = await prisma.bMI.findMany({ where: { userId: userId }, orderBy: { timestamp: 'desc' }, include: { screen: true } });
+    if (bmiRecords.length === 0) return res.json({ totalRecords: 0, recentBMI: null, streak: { currentStreak: 0, longestStreak: 0, isActive: false }, trends: [], categoryDistribution: {}, averageBMI: 0 });
+    const streak = calculateStreak(bmiRecords);
+    const recentBMI = { id: bmiRecords[0].id, bmi: bmiRecords[0].bmi, category: bmiRecords[0].category, height: bmiRecords[0].heightCm, weight: bmiRecords[0].weightKg, timestamp: bmiRecords[0].timestamp.toISOString(), screenId: bmiRecords[0].screenId, deviceId: bmiRecords[0].deviceId, location: bmiRecords[0].location, fortune: bmiRecords[0].fortune };
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const recentRecords = bmiRecords.filter(record => new Date(record.timestamp) >= thirtyDaysAgo);
+    const trends = recentRecords.map(record => ({ date: record.timestamp.toISOString().split('T')[0], bmi: record.bmi, weight: record.weightKg, category: record.category })).reverse();
+    const categoryDistribution = {};
+    bmiRecords.forEach(record => { categoryDistribution[record.category] = (categoryDistribution[record.category] || 0) + 1; });
+    const averageBMI = Number((bmiRecords.reduce((sum, record) => sum + record.bmi, 0) / bmiRecords.length).toFixed(1));
+    return res.json({ totalRecords: bmiRecords.length, recentBMI, streak, trends, categoryDistribution, averageBMI, firstRecord: bmiRecords[bmiRecords.length - 1].timestamp.toISOString(), lastRecord: bmiRecords[0].timestamp.toISOString() });
+  } catch (e) { logger.error('[ANALYTICS] GET /api/user/:userId/analytics error', e); return res.status(500).json({ error: 'internal_error' }); }
 });
 
 // POST /api/bmi/:id/link-user
 app.post('/api/bmi/:id/link-user', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { userId } = req.body;
-        if (!userId) return res.status(400).json({ error: 'userId required' });
-        logger.info(`[BMI-LINK] Linking BMI ${id} to user ${userId}`);
-        const updatedBMI = await prisma.bMI.update({ where: { id }, data: { userId }, include: { user: true, screen: true } });
-        logger.info(`[BMI-LINK] Successfully linked BMI to user: ${updatedBMI.user?.name}`);
-        return res.json({ ok: true, message: 'BMI record linked to user successfully', bmi: { bmiId: updatedBMI.id, screenId: updatedBMI.screenId, height: updatedBMI.heightCm, weight: updatedBMI.weightKg, bmi: updatedBMI.bmi, category: updatedBMI.category, timestamp: updatedBMI.timestamp.toISOString(), userId: updatedBMI.userId, user: updatedBMI.user ? { id: updatedBMI.user.id, name: updatedBMI.user.name, mobile: updatedBMI.user.mobile } : null } });
-    } catch (e) { logger.error('[BMI-LINK] Error linking BMI to user:', e); return res.status(500).json({ error: 'internal_error' }); }
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    logger.info(`[BMI-LINK] Linking BMI ${id} to user ${userId}`);
+    const updatedBMI = await prisma.bMI.update({ where: { id }, data: { userId }, include: { user: true, screen: true } });
+    logger.info(`[BMI-LINK] Successfully linked BMI to user: ${updatedBMI.user?.name}`);
+    return res.json({ ok: true, message: 'BMI record linked to user successfully', bmi: { bmiId: updatedBMI.id, screenId: updatedBMI.screenId, height: updatedBMI.heightCm, weight: updatedBMI.weightKg, bmi: updatedBMI.bmi, category: updatedBMI.category, timestamp: updatedBMI.timestamp.toISOString(), userId: updatedBMI.userId, user: updatedBMI.user ? { id: updatedBMI.user.id, name: updatedBMI.user.name, mobile: updatedBMI.user.mobile } : null } });
+  } catch (e) { logger.error('[BMI-LINK] Error linking BMI to user:', e); return res.status(500).json({ error: 'internal_error' }); }
 });
 
 // GET /api/bmi/:id
 app.get('/api/bmi/:id', async (req, res) => {
-    const id = req.params.id;
-    logger.info(`[BMI] GET request for id: ${id}`);
-    try {
-        const mem = bmiStore.get(id);
-        if (mem) { logger.info(`[BMI] Found in memory:`, mem); return res.json(mem); }
-        logger.info(`[BMI] Searching database for id: ${id}`);
-        const row = await prisma.bMI.findUnique({ where: { id }, include: { user: true, screen: true } });
-        if (!row) { logger.info(`[BMI] Not found in database: ${id}`); return res.status(404).json({ error: 'not_found', message: `BMI record ${id} not found`, id: id }); }
-        const result = { bmiId: row.id, screenId: row.screenId, height: row.heightCm, weight: row.weightKg, bmi: row.bmi, category: row.category, timestamp: row.timestamp.toISOString(), fortune: row.fortune, userId: row.userId, user: row.user ? { id: row.user.id, name: row.user.name, mobile: row.user.mobile } : null };
-        logger.info(`[BMI] Found in database:`, result);
-        return res.json(result);
-    } catch (e) { logger.error('[BMI] GET error', e); return res.status(500).json({ error: 'internal_error', message: e.message, stack: e.stack }); }
+  const id = req.params.id;
+  logger.info(`[BMI] GET request for id: ${id}`);
+  try {
+    const mem = bmiStore.get(id);
+    if (mem) { logger.info(`[BMI] Found in memory:`, mem); return res.json(mem); }
+    logger.info(`[BMI] Searching database for id: ${id}`);
+    const row = await prisma.bMI.findUnique({ where: { id }, include: { user: true, screen: true } });
+    if (!row) { logger.info(`[BMI] Not found in database: ${id}`); return res.status(404).json({ error: 'not_found', message: `BMI record ${id} not found`, id: id }); }
+    const result = { bmiId: row.id, screenId: row.screenId, height: row.heightCm, weight: row.weightKg, bmi: row.bmi, category: row.category, timestamp: row.timestamp.toISOString(), fortune: row.fortune, userId: row.userId, user: row.user ? { id: row.user.id, name: row.user.name, mobile: row.user.mobile } : null };
+    logger.info(`[BMI] Found in database:`, result);
+    return res.json(result);
+  } catch (e) { logger.error('[BMI] GET error', e); return res.status(500).json({ error: 'internal_error', message: e.message, stack: e.stack }); }
 });
 
 // GET /api/debug/connections
 app.get('/api/debug/connections', (_req, res) => {
-    try {
-        const rooms = [];
-        const io = app.get('io');
-        if (io) {
-            io.sockets.adapter.rooms.forEach((socketsSet, room) => { rooms.push({ room, size: socketsSet.size }); });
-            const sockets = [];
-            io.sockets.sockets.forEach((sock) => sockets.push(sock.id));
-            return res.json({ rooms, sockets });
-        }
-        res.json({ rooms: [], sockets: [] });
-    } catch (e) { res.status(500).json({ error: 'debug_error' }); }
+  try {
+    const rooms = [];
+    const io = app.get('io');
+    if (io) {
+      io.sockets.adapter.rooms.forEach((socketsSet, room) => { rooms.push({ room, size: socketsSet.size }); });
+      const sockets = [];
+      io.sockets.sockets.forEach((sock) => sockets.push(sock.id));
+      return res.json({ rooms, sockets });
+    }
+    res.json({ rooms: [], sockets: [] });
+  } catch (e) { res.status(500).json({ error: 'debug_error' }); }
 });
 
 // Function to mount BMI flow routes with Socket.IO (defined before middleware)
@@ -723,23 +726,23 @@ app.mountBMIFlowRoutes = (io) => {
   // Remove the last two handlers (error handler and 404 handler)
   const stack = app._router.stack;
   logger.info(`[BMI-MOUNT] Current stack length: ${stack.length}`);
-  
+
   const notFoundHandler = stack.pop(); // Remove 404 handler
   const errorHandler = stack.pop(); // Remove error handler
-  
+
   logger.info(`[BMI-MOUNT] Removed handlers, new stack length: ${stack.length}`);
-  
+
   // Mount BMI flow routes
   const bmiFlowRoutes = require('./routes/bmiFlowRoutes')(io);
   app.use('/api', bmiFlowRoutes);
   logger.info('[BMI-MOUNT] BMI Flow routes mounted with Socket.IO support');
-  
+
   logger.info(`[BMI-MOUNT] After mounting, stack length: ${app._router.stack.length}`);
-  
+
   // Re-add handlers in correct order
   stack.push(errorHandler);
   stack.push(notFoundHandler);
-  
+
   logger.info(`[BMI-MOUNT] Final stack length: ${stack.length}`);
   logger.info('[BMI-MOUNT] ✅ BMI routes successfully mounted before error/404 handlers');
 };
