@@ -10,8 +10,8 @@ router.get('/push/vapid-public', (req, res) => {
   res.json({ publicKey: 'fcm-enabled' });
 });
 
-// Admin only: save push subscription for this browser
-router.post('/push/subscribe', auth, roleAuth(['superadmin']), async (req, res) => {
+// Admin: save push subscription for this browser (any authenticated admin user)
+router.post('/push/subscribe', auth, async (req, res) => {
   try {
     const subscription = req.body;
     const user = req.user;
