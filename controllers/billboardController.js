@@ -78,13 +78,13 @@ exports.getCitiesByState = async (req, res) => {
 exports.getAllBillboards = async (req, res) => {
   try {
     const user = req.user; // From auth middleware (JWT token)
-    
+
     if (!user || !user.email) {
       return res.status(401).json({ error: 'User not authenticated' });
     }
-    
+
     let whereClause = {};
-    
+
     // Role-based filtering
     // Filter by userId (which stores the billboard owner's email in the user_id column)
     if (user.role === 'superadmin') {
@@ -97,24 +97,24 @@ exports.getAllBillboards = async (req, res) => {
         userId: user.email
       };
     }
-    
+
     console.log(`[getAllBillboards] Fetching billboards for ${user.role}`, {
       userEmail: user.email,
       whereClause: whereClause
     });
-    
+
     const billboards = await prisma.billboard.findMany({
       where: whereClause,
       orderBy: {
         id: 'desc'
       }
     });
-    
+
     console.log(`[getAllBillboards] Found ${billboards.length} billboards for ${user.role}`, {
       userEmail: user.email,
       count: billboards.length
     });
-    
+
     res.json(billboards.map(toApiBillboard));
   } catch (err) {
     logger.error('Error fetching billboards:', err);
@@ -165,7 +165,7 @@ exports.getBillboardById = async (req, res) => {
 exports.getApprovedBillboards = async (req, res) => {
   try {
     // Only return billboards that are APPROVED and AVAILABLE (not disabled)
-    let whereClause = { 
+    let whereClause = {
       status: 'APPROVED',
       available: true  // Only show billboards that are enabled/available
     };
@@ -174,25 +174,25 @@ exports.getApprovedBillboards = async (req, res) => {
     if (req.user) {
       const user = req.user;
       if (user.role === 'superadmin') {
-        whereClause = { 
+        whereClause = {
           status: 'APPROVED',
           available: true
         };
       } else if (user.role === 'publisher') {
-        whereClause = { 
-          userId: user.email, 
+        whereClause = {
+          userId: user.email,
           status: 'APPROVED',
           available: true
         };
       } else if (user.role === 'user') {
-        whereClause = { 
-          userId: user.email, 
+        whereClause = {
+          userId: user.email,
           status: 'APPROVED',
           available: true
         };
       } else {
-        whereClause = { 
-          userId: user.email, 
+        whereClause = {
+          userId: user.email,
           status: 'APPROVED',
           available: true
         };
@@ -219,7 +219,7 @@ exports.addBillboard = async (req, res) => {
   const {
     id, location, city, state, type, orientation, dailyViewership,
     pricePerDay, available, width, height, unit, category,
-    images, latitude, longitude, userId, adDuration,opening_time,closing_time, max_advertisers, maxAdvertiseDuration, auto_brightness, board_format, audio_output, video, resolution, description,name,reasons
+    images, latitude, longitude, userId, adDuration, opening_time, closing_time, max_advertisers, maxAdvertiseDuration, auto_brightness, board_format, audio_output, video, resolution, description, name, reasons
   } = req.body;
 
   try {
@@ -239,7 +239,7 @@ exports.addBillboard = async (req, res) => {
         height: height ? parseInt(height) : null,
         unit,
         category,
-        images: Array.isArray(images) ? images : [],
+        images: Array.isArray(images) ? images.filter(img => img != null && img !== '') : [],
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
         userId: userId || req.user.email, // Use authenticated user's email if not provided
@@ -261,7 +261,7 @@ exports.addBillboard = async (req, res) => {
     });
 
     logger.billboard('Billboard created (pending approval)', `ID: ${billboard.id}, User: ${billboard.userId}`, { status: 'PENDING' });
-    res.status(201).json({ 
+    res.status(201).json({
       message: '✅ Billboard added successfully and waiting for approval',
       billboard: {
         id: billboard.id,
@@ -279,17 +279,17 @@ exports.addBillboard = async (req, res) => {
 // Update
 exports.updateBillboard = async (req, res) => {
   const id = req.params.id;
-  
+
   // Log what we're receiving for debugging
-  logger.billboard('Billboard update request', `ID: ${id}`, { 
+  logger.billboard('Billboard update request', `ID: ${id}`, {
     receivedFields: Object.keys(req.body),
-    body: req.body 
+    body: req.body
   });
 
   try {
     // Build update data object - only include fields that are explicitly provided in the request
     const updateData = {};
-    
+
     // Only check fields that are actually in req.body (not destructured to avoid undefined issues)
     if ('location' in req.body) updateData.location = req.body.location;
     if ('city' in req.body) updateData.city = req.body.city;
@@ -299,7 +299,7 @@ exports.updateBillboard = async (req, res) => {
     if ('dailyViewership' in req.body) updateData.dailyViewership = req.body.dailyViewership ? parseInt(req.body.dailyViewership) : null;
     if ('pricePerDay' in req.body) updateData.pricePerDay = req.body.pricePerDay ? parseInt(req.body.pricePerDay) : null;
     if ('available' in req.body) updateData.available = Boolean(req.body.available);
-    
+
     // Handle size object if provided
     if ('size' in req.body && req.body.size) {
       if ('width' in req.body.size) updateData.width = req.body.size.width ? parseInt(req.body.size.width) : null;
@@ -312,17 +312,17 @@ exports.updateBillboard = async (req, res) => {
     if ('height' in req.body) updateData.height = req.body.height ? parseInt(req.body.height) : null;
     if ('unit' in req.body) updateData.unit = req.body.unit;
     if ('category' in req.body) updateData.category = req.body.category;
-    
-    if ('images' in req.body) updateData.images = Array.isArray(req.body.images) ? req.body.images : [];
+
+    if ('images' in req.body) updateData.images = Array.isArray(req.body.images) ? req.body.images.filter(img => img != null && img !== '') : [];
     if ('latitude' in req.body) updateData.latitude = req.body.latitude ? parseFloat(req.body.latitude) : null;
     if ('longitude' in req.body) updateData.longitude = req.body.longitude ? parseFloat(req.body.longitude) : null;
     if ('adDuration' in req.body) updateData.adDuration = req.body.adDuration || null;
     if ('maxAdvertiseDuration' in req.body) updateData.maxAdvertiseDuration = req.body.maxAdvertiseDuration ? parseInt(req.body.maxAdvertiseDuration) : null;
 
     // Log what we're actually updating
-    logger.billboard('Billboard update data', `ID: ${id}`, { 
+    logger.billboard('Billboard update data', `ID: ${id}`, {
       fieldsToUpdate: Object.keys(updateData),
-      updateData 
+      updateData
     });
 
     await prisma.billboard.update({
@@ -519,9 +519,9 @@ exports.rejectBillboard = async (req, res) => {
       logger.error('Error sending billboard rejection email notification:', emailError);
     });
 
-    logger.billboard('Billboard rejected', `ID: ${id}, User: ${billboard.userId}`, { 
-      rejectedBy: user.email, 
-      reason: rejectionReason 
+    logger.billboard('Billboard rejected', `ID: ${id}, User: ${billboard.userId}`, {
+      rejectedBy: user.email,
+      reason: rejectionReason
     });
 
     // Browser push notification for admin
@@ -530,7 +530,7 @@ exports.rejectBillboard = async (req, res) => {
       `${updatedBillboard.name || updatedBillboard.location || id} was rejected.`,
       '/#/inventory'
     ).catch((e) => logger.warn('Push notify failed after billboard rejection:', e?.message));
-    
+
     res.json({
       message: '❌ Billboard rejected successfully',
       billboard: {
@@ -579,9 +579,9 @@ exports.getPendingBillboards = async (req, res) => {
 exports.getUserBillboards = async (req, res) => {
   try {
     const user = req.user; // From getUserInfo middleware
-    
+
     let whereClause = {};
-    
+
     // Role-based filtering
     if (user.role === 'superadmin') {
       // Superadmin can see all billboards
@@ -592,7 +592,7 @@ exports.getUserBillboards = async (req, res) => {
         userId: user.email
       };
     }
-    
+
     const billboards = await prisma.billboard.findMany({
       where: whereClause,
       orderBy: {
@@ -655,11 +655,11 @@ exports.resubmitBillboard = async (req, res) => {
       logger.warn('Failed to create resubmission notification:', e.message);
     }
 
-    logger.billboard('Billboard resubmitted', `ID: ${id}, User: ${billboard.userId}`, { 
+    logger.billboard('Billboard resubmitted', `ID: ${id}, User: ${billboard.userId}`, {
       resubmittedBy: user.email,
       userRole: user.role
     });
-    
+
     res.json({
       message: '🔄 Billboard resubmitted successfully',
       billboard: {
@@ -682,13 +682,13 @@ exports.getBillboardBookings = async (req, res) => {
   try {
     const { id } = req.params;
     const { limit = 10 } = req.query;
-    
+
     // Get all campaigns and filter for those containing this billboard
     const allCampaigns = await prisma.campaign.findMany({
       orderBy: { createdAt: 'desc' },
       take: parseInt(limit) * 2 // Get more to account for filtering
     });
-    
+
     // Filter campaigns that include this billboard
     const campaigns = allCampaigns.filter(campaign => {
       let billboards = campaign.billboards;
@@ -701,7 +701,7 @@ exports.getBillboardBookings = async (req, res) => {
       }
       return Array.isArray(billboards) && billboards.some(b => b.id === id);
     }).slice(0, parseInt(limit));
-    
+
     // Extract booking details
     const bookings = [];
     campaigns.forEach(campaign => {
@@ -713,7 +713,7 @@ exports.getBillboardBookings = async (req, res) => {
           return;
         }
       }
-      
+
       const billboardData = billboards.find(b => b.id === id);
       if (billboardData) {
         bookings.push({
@@ -729,19 +729,19 @@ exports.getBillboardBookings = async (req, res) => {
         });
       }
     });
-    
+
     logger.billboard('Billboard bookings fetched', `Billboard ID: ${id}, Count: ${bookings.length}`);
-    res.json({ 
-      success: true, 
-      count: bookings.length, 
-      bookings: bookings 
+    res.json({
+      success: true,
+      count: bookings.length,
+      bookings: bookings
     });
-    
+
   } catch (error) {
     logger.error('Error fetching billboard bookings:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch billboard bookings',
-      details: error.message 
+      details: error.message
     });
   }
 };
@@ -750,42 +750,42 @@ exports.getBillboardBookings = async (req, res) => {
 exports.getBillboardOwner = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Get the billboard first
     const billboard = await prisma.billboard.findUnique({
       where: { id }
     });
-    
+
     if (!billboard) {
-      return res.status(404).json({ 
-        error: 'Billboard not found' 
+      return res.status(404).json({
+        error: 'Billboard not found'
       });
     }
-    
+
     if (!billboard.userId) {
-      return res.status(404).json({ 
-        error: 'Billboard owner not found' 
+      return res.status(404).json({
+        error: 'Billboard owner not found'
       });
     }
-    
+
     // Try to find the owner in publishers table first
     let owner = await prisma.publisher.findUnique({
       where: { email: billboard.userId }
     });
-    
+
     // If not found in publishers, try users table
     if (!owner) {
       owner = await prisma.user.findUnique({
         where: { email: billboard.userId }
       });
     }
-    
+
     if (!owner) {
-      return res.status(404).json({ 
-        error: 'Owner not found' 
+      return res.status(404).json({
+        error: 'Owner not found'
       });
     }
-    
+
     // Format owner details
     const ownerDetails = {
       id: owner.id,
@@ -799,18 +799,18 @@ exports.getBillboardOwner = async (req, res) => {
       totalBillboards: owner.totalBillboards || 0,
       revenue: owner.revenue || owner.totalspent || '₹0'
     };
-    
+
     logger.billboard('Billboard owner fetched', `Billboard ID: ${id}, Owner: ${ownerDetails.email}`);
-    res.json({ 
-      success: true, 
-      owner: ownerDetails 
+    res.json({
+      success: true,
+      owner: ownerDetails
     });
-    
+
   } catch (error) {
     logger.error('Error fetching billboard owner:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch billboard owner',
-      details: error.message 
+      details: error.message
     });
   }
 };
@@ -818,10 +818,10 @@ exports.getBillboardOwner = async (req, res) => {
 exports.searchBillboards = async (req, res) => {
   try {
     const { q, type, city, state, limit = 20 } = req.query;
-    
+
     if (!q && !type && !city && !state) {
-      return res.status(400).json({ 
-        error: 'At least one search parameter is required (q, type, city, or state)' 
+      return res.status(400).json({
+        error: 'At least one search parameter is required (q, type, city, or state)'
       });
     }
 
@@ -945,23 +945,23 @@ exports.searchBillboards = async (req, res) => {
     const scoredBillboards = billboards.map(billboard => {
       let score = 0;
       const searchTerm = q ? q.toLowerCase() : '';
-      
+
       if (searchTerm) {
         // Exact matches get highest score
         if (billboard.name?.toLowerCase() === searchTerm) score += 100;
         if (billboard.city?.toLowerCase() === searchTerm) score += 80;
         if (billboard.state?.toLowerCase() === searchTerm) score += 60;
-        
+
         // Partial matches get medium score
         if (billboard.name?.toLowerCase().includes(searchTerm)) score += 50;
         if (billboard.location?.toLowerCase().includes(searchTerm)) score += 40;
         if (billboard.city?.toLowerCase().includes(searchTerm)) score += 30;
         if (billboard.state?.toLowerCase().includes(searchTerm)) score += 20;
-        
+
         // Description matches get lower score
         if (billboard.description?.toLowerCase().includes(searchTerm)) score += 10;
       }
-      
+
       return {
         ...billboard,
         relevanceScore: score
@@ -971,12 +971,12 @@ exports.searchBillboards = async (req, res) => {
     // Sort by relevance score (highest first)
     scoredBillboards.sort((a, b) => b.relevanceScore - a.relevanceScore);
 
-    logger.info('Billboard search completed', { 
-      query: q, 
-      type, 
-      city, 
-      state, 
-      results: scoredBillboards.length 
+    logger.info('Billboard search completed', {
+      query: q,
+      type,
+      city,
+      state,
+      results: scoredBillboards.length
     });
 
     res.json({
@@ -988,9 +988,9 @@ exports.searchBillboards = async (req, res) => {
 
   } catch (error) {
     logger.error('Error searching billboards:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to search billboards',
-      details: error.message 
+      details: error.message
     });
   }
 };
