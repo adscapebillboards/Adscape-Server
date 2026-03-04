@@ -215,15 +215,56 @@ exports.getApprovedBillboards = async (req, res) => {
 
 // Add new billboard (status: pending by default)
 exports.addBillboard = async (req, res) => {
-  console.log('Request body:', req.body); // 👀
-  const {
-    id, location, city, state, type, orientation, dailyViewership,
-    pricePerDay, available, width, height, unit, category,
-    images, latitude, longitude, userId, adDuration, opening_time, closing_time, max_advertisers, maxAdvertiseDuration, auto_brightness, board_format, audio_output, video, resolution, description, name, reasons
-  } = req.body;
-
   try {
-    // Convert string values to appropriate types
+    const {
+      id, location, city, state, type, orientation, dailyViewership,
+      pricePerDay, available, width, height, unit, category,
+      images: bodyImages, latitude, longitude, userId, adDuration,
+      opening_time, closing_time, max_advertisers, maxAdvertiseDuration,
+      auto_brightness, board_format, audio_output, video: bodyVideo,
+      resolution, description, name, reasons
+    } = req.body;
+
+    // ── Upload files from multipart request to Cloudinary (signed, no preset needed) ──
+    let cloudinaryImageUrls = [];
+    let cloudinaryVideoUrl = null;
+
+    const uploadedFiles = req.files ? (Array.isArray(req.files) ? req.files : Object.values(req.files).flat()) : [];
+
+    if (uploadedFiles.length > 0) {
+      const cloudinary = require('cloudinary').v2;
+      const streamUpload = (buffer, resourceType = 'auto') =>
+        new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { resource_type: resourceType, folder: 'billboards' },
+            (error, result) => {
+              if (error) return reject(error);
+              resolve(result.secure_url);
+            }
+          );
+          stream.end(buffer);
+        });
+
+      for (const file of uploadedFiles) {
+        try {
+          const isVideo = file.mimetype?.startsWith('video/');
+          const url = await streamUpload(file.buffer, isVideo ? 'video' : 'image');
+          if (isVideo) {
+            cloudinaryVideoUrl = cloudinaryVideoUrl || url;
+          } else {
+            cloudinaryImageUrls.push(url);
+          }
+        } catch (uploadErr) {
+          logger.error(`[addBillboard] Failed to upload ${file.originalname}:`, uploadErr.message);
+        }
+      }
+    }
+
+    // Merge: prefer server-uploaded URLs; fall back to client-provided URLs in body
+    const existingBodyImages = Array.isArray(bodyImages) ? bodyImages.filter(Boolean) : [];
+    const finalImages = cloudinaryImageUrls.length > 0 ? cloudinaryImageUrls : existingBodyImages;
+    const finalVideo = cloudinaryVideoUrl || bodyVideo || null;
+
     const billboard = await prisma.billboard.create({
       data: {
         id,
@@ -239,11 +280,11 @@ exports.addBillboard = async (req, res) => {
         height: height ? parseInt(height) : null,
         unit,
         category,
-        images: Array.isArray(images) ? images.filter(img => img != null && img !== '') : [],
+        images: finalImages,
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
-        userId: userId || req.user.email, // Use authenticated user's email if not provided
-        adDuration: adDuration || null, // Store adDuration directly
+        userId: userId || req.user.email,
+        adDuration: adDuration || null,
         openingTime: opening_time || null,
         closingTime: closing_time || null,
         maxAdvertisers: max_advertisers ? parseInt(max_advertisers) : null,
@@ -254,13 +295,13 @@ exports.addBillboard = async (req, res) => {
         autoBrightness: auto_brightness !== undefined ? Boolean(auto_brightness) : false,
         boardFormat: board_format || null,
         audioOutput: audio_output !== undefined ? Boolean(audio_output) : false,
-        video: video || null,
+        video: finalVideo,
         reason: Array.isArray(reasons) ? reasons : [],
-        status: 'PENDING' // Set status as pending for approval
+        status: 'PENDING'
       }
     });
 
-    logger.billboard('Billboard created (pending approval)', `ID: ${billboard.id}, User: ${billboard.userId}`, { status: 'PENDING' });
+    logger.billboard('Billboard created (pending approval)', `ID: ${billboard.id}, User: ${billboard.userId}, Images: ${finalImages.length}`, { status: 'PENDING' });
     res.status(201).json({
       message: '✅ Billboard added successfully and waiting for approval',
       billboard: {
@@ -274,6 +315,7 @@ exports.addBillboard = async (req, res) => {
     res.status(500).send('Insert Error');
   }
 };
+
 
 
 // Update
