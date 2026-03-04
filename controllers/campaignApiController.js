@@ -26,6 +26,7 @@ const EmailService = require('../services/emailService');
 const pushNotificationService = require('../services/pushNotificationService');
 // const { generateSlots } = require('../utils/slotGenerator');
 
+// Multer is kept for any legacy use-cases but createCampaign no longer uses it
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -34,257 +35,104 @@ const upload = multer({
   }
 });
 
-// Campaign creation with file upload
+// Campaign creation — JSON only, responds immediately without waiting for file uploads.
+// Files are uploaded separately via tus-js-client and attached via POST /campaigns/:id/attach-file
 const createCampaign = async (req, res) => {
   try {
-    // Debug: Check if files are being received
-    logger.info('Request headers:', req.headers);
-    logger.info('Request body keys:', Object.keys(req.body));
-    logger.info('Request files:', req.files);
-    logger.info('Request file:', req.file);
-    logger.info('Content-Type header:', req.headers['content-type']);
+    logger.info('Campaign create request body keys:', Object.keys(req.body));
 
-    // Handle both request formats:
-    // 1. New format: individual form fields (campaignName, userName, billboards, etc.)
-    // 2. Old format: req.body.data as JSON string
+    // Support both:
+    //   1. JSON body (new fast path): { campaignName, userName, billboards, ... }
+    //   2. Legacy multipart with req.body.data JSON string
     let campaignData;
 
     if (req.body.data) {
-      // Old format: data is a JSON string
       try {
         campaignData = JSON.parse(req.body.data);
-        logger.info('Parsed campaign data from req.body.data:', campaignData);
       } catch (parseError) {
         logger.error('Error parsing campaign data:', parseError);
         return res.status(400).json({ error: 'Invalid JSON data' });
       }
-    } else if (req.body.billboards) {
-      // New format: individual form fields
-      // Parse billboards if it's a string
+    } else if (req.body.billboards || req.body.campaignName) {
       let billboards = req.body.billboards;
       if (typeof billboards === 'string') {
-        try {
-          billboards = JSON.parse(billboards);
-        } catch (e) {
-          logger.error('Error parsing billboards string:', e);
+        try { billboards = JSON.parse(billboards); } catch (e) {
           return res.status(400).json({ error: 'Invalid billboards JSON' });
         }
       }
-
       campaignData = {
         userName: req.body.userName,
         campaignName: req.body.campaignName,
         startDate: req.body.startDate,
         endDate: req.body.endDate,
         totalAmount: req.body.totalAmount,
-        billboards: billboards
+        billboards
       };
-      logger.info('Constructed campaign data from form fields:', campaignData);
     } else {
-      return res.status(400).json({ error: 'Missing campaign data. Expected either req.body.data or individual form fields.' });
+      return res.status(400).json({ error: 'Missing campaign data.' });
     }
 
     const { userName, billboards, campaignName } = campaignData;
-
     if (!userName || !billboards || !Array.isArray(billboards)) {
       return res.status(400).json({ error: 'Missing required fields: userName and billboards array' });
     }
 
-    // Debug logging
-    logger.info('Received campaign data:', { userName, billboardsCount: billboards.length });
-    logger.info('First billboard sample:', billboards[0]);
-
-    // Handle files - check both req.files (array) and req.file (single)
-    const uploadedFiles = [];
-    if (req.files && Array.isArray(req.files)) {
-      uploadedFiles.push(...req.files);
-      logger.info('Files from req.files array:', req.files.length);
-    }
-    if (req.file) {
-      uploadedFiles.push(req.file);
-      logger.info('File from req.file:', req.file.originalname);
-    }
-
-    // Also check if files are in req.body (sometimes multer puts them there)
-    if (req.body.files) {
-      logger.info('Files found in req.body.files');
-    }
-
-    logger.campaign('Campaign creation started', `User: ${userName}, Billboards: ${billboards.length}`);
-    logger.info('Total uploaded files count:', uploadedFiles.length);
-    logger.info('Uploaded files details:', uploadedFiles.map(f => ({
-      name: f?.originalname,
-      size: f?.size,
-      mimetype: f?.mimetype,
-      fieldname: f?.fieldname
-    })));
-    logger.info('Billboard IDs from request:', billboards.map(b => b.id || b.billboardId || b.billboard?.id));
+    logger.campaign('Campaign creation started (async mode)', `User: ${userName}, Billboards: ${billboards.length}`);
 
     const campaignId = uuidv4();
 
-    const enrichedBillboards = await Promise.all(billboards.map(async (billboard) => {
-      // Handle different billboard data structures
-      // Could be: { id, bookingDetails } or { billboardId, billboard: {...}, startDate, endDate }
+    // Build billboard records WITHOUT waiting for file uploads — files: [] initially
+    const enrichedBillboards = billboards.map((billboard) => {
       const billboardObj = billboard.billboard || billboard;
       const id = billboardObj.id || billboard.billboardId || billboard.id;
 
-      // Get booking details - could be in bookingDetails or directly in billboard
       let bookingDetails = billboard.bookingDetails || billboardObj.bookingDetails;
       if (!bookingDetails && (billboard.startDate || billboard.endDate)) {
-        bookingDetails = {
-          startDate: billboard.startDate,
-          endDate: billboard.endDate
-        };
+        bookingDetails = { startDate: billboard.startDate, endDate: billboard.endDate };
       }
 
       if (!id || !bookingDetails || !bookingDetails.startDate || !bookingDetails.endDate) {
-        logger.error('Invalid billboard data structure:', {
-          hasId: !!id,
-          hasBookingDetails: !!bookingDetails,
-          billboardKeys: Object.keys(billboard),
-          billboardObjKeys: billboardObj ? Object.keys(billboardObj) : 'N/A'
-        });
         throw new Error('Invalid billboard data structure: missing id or bookingDetails');
       }
 
-      logger.info('Processing billboard:', { id, bookingDetails });
-
       const { location, city, pricePerDay, owner } = billboardObj;
-      // Extract screen_id from multiple possible field names
       const screen_id = billboardObj.screen_id || billboardObj.screenId || billboard.screen_id || billboard.screenId || null;
       const { startDate, endDate } = bookingDetails;
 
-      // Log the billboard data to see what's available
-      logger.info(`Processing billboard ${id}:`, {
-        id,
-        location,
-        city,
-        pricePerDay,
-        owner,
-        screen_id,
-        bookingDetails,
-        allKeys: Object.keys(billboard)
-      });
-
-      if (!startDate || !endDate) {
-        logger.error('Missing booking dates for billboard:', id);
-        throw new Error('Missing booking dates');
-      }
-
-      const fileUrls = [];
-
-      // Get billboard ID - could be in different fields
-      const billboardId = id || billboard.billboardId || billboard.billboard?.id || billboard.id;
-
-      logger.info(`Billboard ${billboardId}: Looking for files matching pattern "${billboardId}_"`);
-
-      const matchingFiles = uploadedFiles.filter(file => {
-        if (!file || !file.originalname) return false;
-        // Check if file name starts with billboard ID followed by underscore
-        const matches = file.originalname.startsWith(`${billboardId}_`);
-        if (matches) {
-          logger.info(`Billboard ${billboardId}: Found matching file: ${file.originalname}`);
-        }
-        return matches;
-      });
-
-      // Check for files that don't match the pattern
-      const nonMatchingFiles = uploadedFiles.filter(file =>
-        file && file.originalname && !file.originalname.startsWith(`${billboardId}_`)
-      );
-
-      if (nonMatchingFiles.length > 0) {
-        logger.warn(`Billboard ${billboardId}: Found ${nonMatchingFiles.length} non-matching files:`, nonMatchingFiles.map(f => f?.originalname));
-      }
-
-      logger.info(`Billboard ${billboardId}: Found ${matchingFiles.length} matching files`);
-      logger.info(`Billboard ${billboardId}: Matching files:`, matchingFiles.map(f => f?.originalname));
-
-      const streamUpload = (fileBuffer) => {
-        return new Promise((resolve, reject) => {
-          const stream = cloudinary.uploader.upload_stream(
-            { resource_type: 'auto' }, // auto detects image/video/raw
-            (error, result) => {
-              if (error) return reject(error);
-              resolve(result.secure_url);
-            }
-          );
-          stream.end(fileBuffer);
-        });
-      };
-
-      const uploadPromises = matchingFiles.map(async file => {
-        try {
-          if (file && file.buffer) {
-            logger.info(`Uploading file ${file.originalname} to Cloudinary...`);
-            const url = await streamUpload(file.buffer);
-            logger.info(`Successfully uploaded ${file.originalname} to: ${url}`);
-            return url;
-          } else {
-            logger.warn(`Skipping file ${file?.originalname || 'unknown'}: missing buffer`);
-            return null;
-          }
-        } catch (error) {
-          logger.error(`Failed to upload file ${file?.originalname || 'unknown'}:`, error.message);
-          return null;
-        }
-      });
-
-      const uploadedUrls = await Promise.all(uploadPromises);
-      fileUrls.push(...uploadedUrls.filter(url => url !== null));
-
-      logger.info(`Billboard ${id}: Uploaded ${fileUrls.length} files`);
-
-      // Calculate total price for this billboard
       const days = (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24) + 1;
-      const totalPrice = days * pricePerDay;
+      const totalPrice = days * (pricePerDay || billboardObj.pricePerDay || 0);
 
-      const enrichedBillboard = {
+      const { getISTTimestamp } = require('../utils/timeUtils');
+      return {
         id,
         location: location || billboardObj.location,
         city: city || billboardObj.city,
         pricePerDay: pricePerDay || billboardObj.pricePerDay,
-        totalPrice, // Add total price for this billboard
-        bookingDetails: {
-          startDate,
-          endDate
-        },
-        files: fileUrls,
+        totalPrice,
+        bookingDetails: { startDate, endDate },
+        files: [], // Files will be attached asynchronously via /attach-file
         owner: owner || billboardObj.owner,
-        screen_id: screen_id, // Ensure screen_id is stored
-        // Campaign-related information for each billboard
-        userName: userName,
-        status: "PENDING",
-        createDate: (() => {
-          const { getISTTimestamp } = require('../utils/timeUtils');
-          return getISTTimestamp();
-        })(),
-        endDate: endDate,
-        billboardCampaignId: `${campaignId}_${id}`, // Generate unique billboard campaign ID
-        // Keep all existing billboard details from the original billboard object
+        screen_id,
+        userName,
+        status: 'PENDING',
+        createDate: getISTTimestamp(),
+        endDate,
+        billboardCampaignId: `${campaignId}_${id}`,
         ...billboardObj,
         ...billboard
       };
+    });
 
-      logger.info(`Enriched billboard ${id} with screen_id:`, enrichedBillboard.screen_id);
-
-      return enrichedBillboard;
-    }));
+    // Use provided totalAmount or calculate
+    const totalAmount = parseFloat(campaignData.totalAmount) || enrichedBillboards.reduce((sum, b) => {
+      const days = (new Date(b.bookingDetails.endDate) - new Date(b.bookingDetails.startDate)) / (1000 * 60 * 60 * 24) + 1;
+      return sum + (days * (b.pricePerDay || 0));
+    }, 0);
 
     const startDate = enrichedBillboards[0]?.bookingDetails.startDate;
     const endDate = enrichedBillboards[0]?.bookingDetails.endDate;
 
-    // Calculate totalAmount
-    const totalAmount = enrichedBillboards.reduce((sum, b) => {
-      const days = (new Date(b.bookingDetails.endDate) - new Date(b.bookingDetails.startDate)) / (1000 * 60 * 60 * 24) + 1;
-      return sum + (days * b.pricePerDay);
-    }, 0);
-
-    logger.info('Storing campaign in database with enriched billboards:', enrichedBillboards.map(b => ({
-      id: b.id,
-      filesCount: b.files?.length || 0,
-      files: b.files
-    })));
+    logger.info(`Campaign ${campaignId}: creating DB record with ${enrichedBillboards.length} billboards (files will be attached asynchronously)`);
 
     // Test database connection before attempting to save
     try {
@@ -399,6 +247,64 @@ const createCampaign = async (req, res) => {
 
   } catch (err) {
     logger.error('Error creating campaign:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// Attach a file URL to a campaign billboard after async TUS upload
+// POST /api/campaigns/:id/attach-file
+// Body: { billboardId: string, fileUrl: string }
+const attachCampaignFile = async (req, res) => {
+  try {
+    const { id: campaignId } = req.params;
+    const { billboardId, fileUrl } = req.body;
+
+    if (!campaignId || !billboardId || !fileUrl) {
+      return res.status(400).json({ error: 'campaignId, billboardId and fileUrl are required' });
+    }
+
+    const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    // Parse billboards field
+    let billboards = campaign.billboards;
+    if (typeof billboards === 'string') {
+      try { billboards = JSON.parse(billboards); } catch { billboards = []; }
+    }
+    if (!Array.isArray(billboards)) billboards = [];
+
+    // Find the billboard and push the file URL
+    let found = false;
+    const updated = billboards.map(bb => {
+      const bbId = bb.id || bb.billboardId;
+      if (String(bbId) === String(billboardId)) {
+        found = true;
+        const files = Array.isArray(bb.files) ? bb.files : [];
+        return { ...bb, files: [...files, fileUrl] };
+      }
+      return bb;
+    });
+
+    if (!found) {
+      // Fallback: attach to first billboard if ID not matched
+      logger.warn(`attachCampaignFile: billboardId ${billboardId} not found in campaign ${campaignId}, attaching to first billboard`);
+      if (updated.length > 0) {
+        const files = Array.isArray(updated[0].files) ? updated[0].files : [];
+        updated[0] = { ...updated[0], files: [...files, fileUrl] };
+      }
+    }
+
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: { billboards: updated }
+    });
+
+    logger.info(`✅ Attached file to campaign ${campaignId}, billboard ${billboardId}: ${fileUrl}`);
+    res.json({ success: true, message: 'File attached successfully', campaignId, billboardId, fileUrl });
+  } catch (err) {
+    logger.error('Error attaching campaign file:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 };
@@ -1859,5 +1765,6 @@ module.exports = {
   deleteBillboardFromCampaign,
   updateUserStatistics,
   updateCampaignStatusBasedOnBillboards,
-  completePayment
+  completePayment,
+  attachCampaignFile
 }; 

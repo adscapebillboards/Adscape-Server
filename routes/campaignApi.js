@@ -15,11 +15,15 @@ const {
   getCampaignWithBillboardStatuses,
   deleteCampaign,
   deleteBillboardFromCampaign,
-  completePayment
+  completePayment,
+  attachCampaignFile
 } = require('../controllers/campaignApiController');
 
-// Campaign creation with file upload
-router.post('/create-campaign', upload.array('files'), createCampaign);
+// Campaign creation — JSON body only (fast path, no file upload blocking)
+router.post('/create-campaign', createCampaign);
+
+// Attach a file URL to a campaign billboard (called after async TUS upload completes)
+router.post('/campaigns/:id/attach-file', attachCampaignFile);
 
 // Get campaigns by user
 router.get('/campaigns', getCampaignsByUser);
