@@ -114,11 +114,11 @@ const allowedOrigins = new Set([
   'http://localhost:5174',
   'https://adscape-player.vercel.app',
   'https://adscape.co.in',
+  'https://www.adscape.co.in',
   'https://admin.adscape.co.in',
   'http://127.0.0.1:5500',
   'https://endearing-begonia-927b56.netlify.app',
   'https://bmi-client.onrender.com',
-  'https://admin.adscape.co.in'
 ]);
 
 

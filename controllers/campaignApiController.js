@@ -24,7 +24,7 @@ const cloudinary = require('../config/cloudinary');
 const { v4: uuidv4 } = require('uuid');
 const EmailService = require('../services/emailService');
 const pushNotificationService = require('../services/pushNotificationService');
-const { generateSlots } = require('../utils/slotGenerator');
+// const { generateSlots } = require('../utils/slotGenerator');
 
 // Multer is kept for any legacy use-cases but createCampaign no longer uses it
 const upload = multer({
