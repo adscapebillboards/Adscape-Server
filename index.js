@@ -58,7 +58,7 @@ io.on('connection', (socket) => {
     });
 
     // Handle player joining
-    socket.on('player-join', (data) => {
+    socket.on('player-join', async (data) => {
         console.log('[SOCKET] Player joined:', data);
         const machineId = data.machineId || data.screenId;
         const screenId = data.screenId || data.machineId;
@@ -79,6 +79,28 @@ io.on('connection', (socket) => {
             socketId: socket.id,
             rooms: [`player-${machineId}`, `screen:${screenId}`]
         });
+
+        // Lookup billboard details and emit them to the player
+        if (screenId) {
+            try {
+                const billboard = await prisma.billboard.findFirst({
+                    where: { screen_id: screenId }
+                });
+
+                if (billboard) {
+                    const defaultImage = (billboard.images && billboard.images.length > 0) ? billboard.images[0] : null;
+                    socket.emit('billboard-details', {
+                        name: billboard.name,
+                        location: billboard.location,
+                        city: billboard.city,
+                        defaultImage: defaultImage
+                    });
+                    console.log(`[SOCKET] Emitted billboard-details for screen: ${screenId}`);
+                }
+            } catch (err) {
+                console.error('[SOCKET] Error fetching billboard details for player-join:', err);
+            }
+        }
     });
 
     // Handle asset playing status updates
