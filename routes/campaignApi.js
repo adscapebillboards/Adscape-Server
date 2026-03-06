@@ -55,6 +55,75 @@ router.delete('/campaigns/:id', deleteCampaign);
 // Delete individual billboard from campaign
 router.delete('/campaigns/:campaignId/billboards/:billboardId', deleteBillboardFromCampaign);
 
+// ===== DEV HELPER: Generate slots for today (bypasses payment gate) =====
+router.post('/campaigns/:id/generate-slots-today', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const campaign = await prisma.campaign.findUnique({ where: { id } });
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    // Get today as YYYY-MM-DD in IST
+    const now = new Date();
+    const istStr = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
+    const [m, d, y] = istStr.split('/');
+    const todayIST = `${y}-${m}-${d}`;
+
+    let billboards = campaign.billboards;
+    if (typeof billboards === 'string') billboards = JSON.parse(billboards);
+    if (!Array.isArray(billboards) || billboards.length === 0) {
+      return res.status(400).json({ error: 'Campaign has no billboards' });
+    }
+
+    const defaultAsset = 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+    let totalCreated = 0;
+
+    for (const bb of billboards) {
+      const billboardId = String(bb.id);
+      const assetUrl = bb.files?.[0] || bb.creative || defaultAsset;
+      const screenId = bb.screen_id || bb.screenId || null;
+
+      // Skip if slots already exist today for this billboard in this campaign
+      const existing = await prisma.generatedSlot.count({
+        where: {
+          campaignId: id,
+          billboardId,
+          startDate: { gte: new Date(`${todayIST}T00:00:00Z`), lte: new Date(`${todayIST}T23:59:59Z`) }
+        }
+      });
+      if (existing > 0) {
+        logger.info(`[DEV] Slots already exist for billboard ${billboardId} on ${todayIST} — skipping`);
+        continue;
+      }
+
+      await prisma.generatedSlot.create({
+        data: {
+          campaignId: String(id),
+          billboardId,
+          assetUrl,
+          startDate: new Date(`${todayIST}T00:00:00.000Z`),
+          endDate: new Date(`${todayIST}T23:59:59.000Z`),
+          duration: 15,
+          slotNumber: 1,
+          screenId: screenId ? String(screenId) : null
+        }
+      });
+      totalCreated++;
+      logger.info(`[DEV] Created slot for billboard ${billboardId} on ${todayIST}`);
+    }
+
+    res.json({
+      success: true,
+      message: `Created ${totalCreated} slot(s) for today (${todayIST})`,
+      date: todayIST,
+      slotsCreated: totalCreated
+    });
+  } catch (err) {
+    logger.error('[DEV] generate-slots-today error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// ===== END DEV HELPER =====
+
 // Get assets for player with enhanced features
 router.get('/assets/:screenId', async (req, res) => {
   try {

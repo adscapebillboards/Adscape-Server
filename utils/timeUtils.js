@@ -19,7 +19,7 @@ const getCurrentISTTime = () => {
  */
 const getCurrentISTDate = () => {
   const now = new Date();
-  const istString = now.toLocaleString('en-US', { 
+  const istString = now.toLocaleString('en-US', {
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
@@ -36,7 +36,7 @@ const getCurrentISTDate = () => {
  */
 const formatISTDateString = (date) => {
   const dateObj = typeof date === 'string' ? new Date(date) : date;
-  const istString = dateObj.toLocaleString('en-US', { 
+  const istString = dateObj.toLocaleString('en-US', {
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
@@ -59,13 +59,28 @@ const parseISTDate = (dateString) => {
     const dateStr = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T00:00:00+05:30`;
     return new Date(dateStr);
   }
-  
+
   // For ISO strings with timezone, parse normally
   if (dateString.includes('T') || dateString.includes('Z') || dateString.includes('+') || dateString.includes('-', 10)) {
     return new Date(dateString);
   }
-  
+
   // For other formats, parse normally (assume already in correct timezone)
+  return new Date(dateString);
+};
+
+/**
+ * Parse a YYYY-MM-DD date string as UTC midnight.
+ * Use this for Prisma @db.Date fields so that PostgreSQL stores the exact
+ * calendar date the user selected without any timezone offset shifting.
+ * @param {string} dateString - Date string in YYYY-MM-DD format
+ * @returns {Date} Date object at UTC midnight for the given calendar date
+ */
+const parseDateAsUTC = (dateString) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+    return new Date(dateString + 'T00:00:00.000Z');
+  }
+  // Already has timezone info — pass through
   return new Date(dateString);
 };
 
@@ -85,7 +100,7 @@ const getISTTimestamp = () => {
  */
 const formatISTDate = (date, format = 'short') => {
   const dateObj = typeof date === 'string' ? new Date(date) : date;
-  
+
   switch (format) {
     case 'short':
       return dateObj.toLocaleDateString('en-IN', {
@@ -132,7 +147,7 @@ const formatISTDate = (date, format = 'short') => {
  */
 const getStartOfDayIST = (date) => {
   const dateObj = typeof date === 'string' ? new Date(date) : date;
-  const istString = dateObj.toLocaleString('en-US', { 
+  const istString = dateObj.toLocaleString('en-US', {
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
@@ -150,7 +165,7 @@ const getStartOfDayIST = (date) => {
  */
 const getEndOfDayIST = (date) => {
   const dateObj = typeof date === 'string' ? new Date(date) : date;
-  const istString = dateObj.toLocaleString('en-US', { 
+  const istString = dateObj.toLocaleString('en-US', {
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
@@ -180,6 +195,7 @@ module.exports = {
   formatISTDate,
   formatISTDateString,
   parseISTDate,
+  parseDateAsUTC,
   getStartOfDayIST,
   getEndOfDayIST,
   isTodayIST

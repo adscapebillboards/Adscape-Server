@@ -71,7 +71,7 @@ const createCampaign = async (req, res) => {
     }, 0);
 
     // Create campaign using Prisma
-    const { parseISTDate } = require('../utils/timeUtils');
+    const { parseDateAsUTC } = require('../utils/timeUtils');
     const campaign = await prisma.campaign.create({
       data: {
         id: campaignId,
@@ -79,14 +79,14 @@ const createCampaign = async (req, res) => {
         campaignName: "Auto Campaign",
         status: "PENDING",
         totalAmount,
-        startDate: parseISTDate(startDate),
-        endDate: parseISTDate(endDate),
+        startDate: parseDateAsUTC(startDate),
+        endDate: parseDateAsUTC(endDate),
         billboards: enrichedBillboards
       }
     });
 
     logger.campaign('Campaign created successfully', `ID: ${campaignId}, User: ${userName}`);
-    res.status(201).json({ 
+    res.status(201).json({
       message: 'Campaign created successfully.',
       id: campaignId
     });
@@ -101,7 +101,7 @@ const createCampaign = async (req, res) => {
 const getCampaignsByUser = async (req, res) => {
   const { user } = req.query;
   logger.campaign('Fetching campaigns', `User: ${user}`);
-  
+
   try {
     const campaigns = await prisma.campaign.findMany({
       where: {
@@ -258,17 +258,17 @@ const updateCampaignStatus = async (req, res) => {
       logger.campaign('Campaign approved', `Campaign ID: ${id}`);
       logger.info('⚠️  Slot generation will occur after payment completion, not on approval');
     }
-    
+
     // Generate slots when payment is completed
     if (status === 'PAYMENT_COMPLETED') {
       logger.campaign('Payment completed, generating slots', `Campaign ID: ${id}`);
-      
+
       try {
         // Fetch the campaign with billboards data
         const campaignWithBillboards = await prisma.campaign.findUnique({
           where: { id }
         });
-        
+
         if (campaignWithBillboards) {
           await generateSlots(campaignWithBillboards);
           logger.campaign('Slots generated successfully after payment', `Campaign ID: ${id}`);
@@ -339,8 +339,8 @@ const updateBillboardStatus = async (req, res) => {
     }
 
     logger.campaign('Billboard status updated', `Campaign ID: ${campaignId}, Billboard ID: ${billboardId}, Status: ${status}`);
-    res.json({ 
-      message: 'Billboard status updated successfully', 
+    res.json({
+      message: 'Billboard status updated successfully',
       campaign: updatedCampaign,
       updatedBillboard: billboards[billboardIndex]
     });
@@ -400,7 +400,7 @@ const generateSlotsForBillboard = async (campaignId, billboard) => {
 
       // Generate up to 8 slots per day
       const slotsToGenerate = Math.min(8 - existingSlots, 8);
-      
+
       for (let i = 0; i < slotsToGenerate; i++) {
         const slotNumber = existingSlots + i + 1;
         const slotStart = new Date(`${dateStr}T00:00:00Z`);

@@ -149,7 +149,7 @@ const createCampaign = async (req, res) => {
     }
 
     try {
-      const { parseISTDate } = require('../utils/timeUtils');
+      const { parseDateAsUTC } = require('../utils/timeUtils');
       await prisma.campaign.create({
         data: {
           id: campaignId,
@@ -157,8 +157,8 @@ const createCampaign = async (req, res) => {
           campaignName: campaignName || "Auto Campaign",
           status: "PENDING",
           totalAmount,
-          startDate: parseISTDate(startDate),
-          endDate: parseISTDate(endDate),
+          startDate: parseDateAsUTC(startDate),
+          endDate: parseDateAsUTC(endDate),
           billboards: enrichedBillboards
         }
       });
@@ -786,16 +786,50 @@ const completePayment = async (req, res) => {
 
     // Generate slots after payment completion
     try {
+      // Get campaign header dates as fallback for billboards missing bookingDetails
+      const campaignStartDate = campaignWithBillboards.startDate;
+      const campaignEndDate = campaignWithBillboards.endDate;
+
+      // Helper: format a Date or ISO string as YYYY-MM-DD in IST
+      const toISTDateString = (d) => {
+        if (!d) return null;
+        const dt = new Date(d);
+        const ist = dt.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const [m, day, y] = ist.split('/');
+        return `${y}-${m}-${day}`;
+      };
+
+      const campaignStartStr = toISTDateString(campaignStartDate);
+      const campaignEndStr = toISTDateString(campaignEndDate);
+
+      // Enrich each billboard: inject campaign-level dates wherever billboard-level dates are missing
+      const enrichedBillboards = parsedBillboards.map((bb) => {
+        const bdStart = bb.bookingDetails?.startDate || bb.startDate;
+        const bdEnd = bb.bookingDetails?.endDate || bb.endDate;
+        return {
+          ...bb,
+          bookingDetails: {
+            startDate: bdStart || campaignStartStr,
+            endDate: bdEnd || campaignEndStr,
+          },
+          startDate: bdStart || campaignStartStr,
+          endDate: bdEnd || campaignEndStr,
+        };
+      });
+
+      logger.info(`[generateSlots] Campaign ${id} — sample billboard:`, JSON.stringify(enrichedBillboards[0]).slice(0, 400));
+
       const campaignWithParsedBillboards = {
         ...campaignWithBillboards,
-        billboards: parsedBillboards
+        billboards: enrichedBillboards
       };
 
       logger.info(`Generating slots for campaign ${id}...`);
       await generateSlots(campaignWithParsedBillboards);
       logger.campaign('Slots generated successfully after payment', `Campaign ID: ${id}`);
     } catch (slotGenError) {
-      logger.error('Error generating slots after payment:', slotGenError);
+      logger.error('Error generating slots after payment:', slotGenError.message);
+      logger.error('Slot gen stack:', slotGenError.stack);
       // Continue with status update even if slot generation fails
     }
 
@@ -1497,10 +1531,12 @@ async function generateSlots(campaign) {
 
   for (const billboard of billboards) {
     const billboardId = String(billboard.id); // Ensure it's a string
-    const assetUrl = billboard.files?.[0];
+    const assetUrl = billboard.files?.[0] || billboard.creative || "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png";
     // Extract screenId from billboard - check multiple possible field names
     const screenId = billboard.screen_id || billboard.screenId || null;
-    const { startDate, endDate } = billboard.bookingDetails || {};
+    // Dates can be in bookingDetails OR at top-level (depending on how the billboard was stored)
+    const startDate = billboard.bookingDetails?.startDate || billboard.startDate || null;
+    const endDate = billboard.bookingDetails?.endDate || billboard.endDate || null;
     const durationSeconds = (() => {
       const d = billboard.assetScheduling?.duration || billboard.adDuration || 15;
       const n = Number(d);
@@ -1512,20 +1548,39 @@ async function generateSlots(campaign) {
       screenId,
       startDate,
       endDate,
-      billboardKeys: Object.keys(billboard) // Log all available keys for debugging
+      hasBookingDetails: !!billboard.bookingDetails,
+      topLevelStartDate: billboard.startDate,
+      topLevelEndDate: billboard.endDate,
     });
 
-    if (!startDate || !endDate || !assetUrl) {
-      logger.warn(`⚠️ Missing data for billboard ${billboardId}:`, {
-        hasStartDate: !!startDate,
-        hasEndDate: !!endDate,
-        hasAssetUrl: !!assetUrl
-      });
+    if (!startDate || !endDate) {
+      logger.warn(`⚠️ Missing dates for billboard ${billboardId} — skipping`);
       continue;
     }
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // Parse as UTC midnight so YYYY-MM-DD strings don't drift into the previous day
+    const parseUTC = (s) => {
+      if (!s) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(s))) return new Date(String(s) + 'T00:00:00.000Z');
+      return new Date(s);
+    };
+    let start = parseUTC(startDate);
+    const end = parseUTC(endDate);
+
+    // DEV OVERRIDE: Always generate slots starting from TODAY so players have immediate content
+    const todayIST = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
+    const [tm, td, ty] = todayIST.split('/');
+    const todayUTC = new Date(`${ty}-${tm}-${td}T00:00:00.000Z`);
+
+    if (todayUTC < start) {
+      logger.info(`[DEV OVERRIDE] Shifting campaign start date backward to TODAY (${ty}-${tm}-${td}) for immediate playback`);
+      start = todayUTC;
+    }
+
+    if (!start || !end || isNaN(start.getTime()) || isNaN(end.getTime())) {
+      logger.warn(`⚠️ Invalid Date objects for billboard ${billboardId}: start=${start} end=${end}`);
+      continue;
+    }
 
     // No test slots in production logic
 
@@ -1535,7 +1590,15 @@ async function generateSlots(campaign) {
       current <= end;
       current.setDate(current.getDate() + 1)
     ) {
-      const dateStr = current.toISOString().slice(0, 10);
+      // Force IST local calendar dates to avoid 18:30 UTC dropping back a day
+      const istString = current.toLocaleString('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const [m, d, y] = istString.split('/');
+      const dateStr = `${y}-${m}-${d}`;
 
       // Skip if this campaign already has a slot for this billboard on this day
       const existingForCampaign = await prisma.generatedSlot.findFirst({
@@ -1586,7 +1649,7 @@ async function generateSlots(campaign) {
           data: slotData
         });
 
-        logger.info(`🆕 Slot #${slotCount + 1} for ${billboardId} on ${dateStr} with screenId: ${screenId}`);
+        logger.info(`🆕 Slot #${slotCountThisDay + 1} for ${billboardId} on ${dateStr} with screenId: ${screenId}`);
       } catch (error) {
         logger.error(`❌ Error creating slot for ${billboardId} on ${dateStr}:`, error.message);
         logger.error(`❌ Error details:`, error);
