@@ -44,6 +44,7 @@ const bmiRoutes = require('./routes/bmiRoutes');
 const path = require('path');
 const fs = require('fs');
 const playerRoutes = require('./routes/players');
+const playerV1Routes = require('./routes/playerV1Routes');
 const availabilityRoutes = require('./routes/availability');
 const adscapeRoutes = require('./routes/adscapeRoutes');
 const prisma = require('./db/db');
@@ -308,6 +309,7 @@ app.use('/api/asset-cleanup', assetCleanupRoutes);
 app.use('/api', slotRoutes);
 // Player registration routes
 app.use('/api', playerRoutes);
+app.use('/api/v1', playerV1Routes);
 // Availability routes
 app.use('/api', availabilityRoutes);
 

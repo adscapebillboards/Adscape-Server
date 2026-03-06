@@ -68,15 +68,15 @@ const getSlotsByBillboard = async (req, res) => {
 const getAssetsByScreen = async (req, res) => {
   const { screen_id } = req.params;
   const now = new Date();
-  const start = new Date(); start.setHours(0,0,0,0);
-  const tomorrowEnd = new Date(); tomorrowEnd.setDate(tomorrowEnd.getDate() + 1); tomorrowEnd.setHours(23,59,59,999);
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const tomorrowEnd = new Date(); tomorrowEnd.setDate(tomorrowEnd.getDate() + 1); tomorrowEnd.setHours(23, 59, 59, 999);
 
   // Entry log (both logger and console)
   logger.info && logger.info(`Incoming assets request for screen ${screen_id} (${start.toISOString()} - ${tomorrowEnd.toISOString()})`);
   console.info('[ASSETS] Incoming request', { screen_id, window: `${start.toISOString()} - ${tomorrowEnd.toISOString()}` });
 
   try {
-    const slots = await prisma.generatedSlot.findMany({
+    let slots = await prisma.generatedSlot.findMany({
       where: {
         screenId: screen_id,
         startDate: { gte: start },
@@ -87,11 +87,32 @@ const getAssetsByScreen = async (req, res) => {
 
     if (!slots || slots.length === 0) {
       logger.asset && logger.asset(
-        'Assets response (none)',
-        `Screen ${screen_id} window ${start.toISOString()} - ${tomorrowEnd.toISOString()}: 0 assets`
+        'Assets response (fallback)',
+        `Screen ${screen_id} window ${start.toISOString()} - ${tomorrowEnd.toISOString()}: 0 assets. Falling back to any upcoming slots.`
       );
-      console.info('[ASSETS] None', { screen_id, count: 0, window: `${start.toISOString()} - ${tomorrowEnd.toISOString()}` });
-      return res.json([]);
+
+      slots = await prisma.generatedSlot.findMany({
+        where: {
+          screenId: screen_id,
+          startDate: { gte: start }
+        },
+        orderBy: [{ startDate: 'asc' }, { slotNumber: 'asc' }],
+        take: 20
+      });
+
+      // If no future slots, just grab the latest slots available
+      if (!slots || slots.length === 0) {
+        slots = await prisma.generatedSlot.findMany({
+          where: { screenId: screen_id },
+          orderBy: [{ startDate: 'desc' }, { slotNumber: 'asc' }],
+          take: 20
+        });
+      }
+
+      if (!slots || slots.length === 0) {
+        console.info('[ASSETS] None at all', { screen_id, count: 0 });
+        return res.json([]);
+      }
     }
 
     const assets = slots.map(slot => ({
@@ -99,7 +120,7 @@ const getAssetsByScreen = async (req, res) => {
       slot_number: slot.slotNumber,
       duration: slot.duration || 10,
       campaign_id: slot.campaignId,
-      play_date: slot.startDate.toISOString().slice(0,10),
+      play_date: slot.startDate.toISOString().slice(0, 10),
       start_date: slot.startDate,
       end_date: slot.endDate
     }));
@@ -138,7 +159,7 @@ const getAssetsByScreen = async (req, res) => {
       'sample:', JSON.stringify(sample)
     );
     console.info('[ASSETS] Sent', { screen_id, total: finalList.length, sample });
-    
+
     // Log all asset remote URLs (clients will download these to local storage)
     console.info(`[ASSETS] 📥 Asset remote URLs for screen ${screen_id} (${finalList.length} total) - Clients will download these to local storage:`);
     finalList.forEach((asset, index) => {
@@ -162,7 +183,7 @@ const trackAssetPlay = async (req, res) => {
   try {
     const timestamp = played_at ? new Date(played_at) : new Date();
     const playDate = timestamp.toISOString().split("T")[0];
-    
+
     // Log local file path if provided
     if (local_file_path) {
       console.info(`[ASSETS] 💾 Asset downloaded to local storage: ${local_file_path} (Screen: ${screen_id}, Asset URL: ${asset_url})`);

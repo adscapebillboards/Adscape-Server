@@ -151,6 +151,8 @@ model AssetPlayLog {
   assetUrl   String   @map("asset_url")
   playedAt   DateTime @default(now()) @map("played_at") @db.Timestamp(6)
   campaignId String?  @map("campaign_id")
+  durationMs Int?     @map("duration_ms")
+  success    Boolean? @default(true)
 
   @@index([campaignId], map: "idx_asset_play_logs_campaign")
   @@map("asset_play_logs")
@@ -410,4 +412,40 @@ model PushSubscription {
   keys        Json 
   adminEmail  String? 
   createdAt   DateTime @default(now()) 
+}
+
+model PlayerAsset {
+  id         String    @id @default(uuid()) @db.Uuid
+  url        String    @unique
+  checksum   String?
+  sizeBytes  BigInt?   @map("size_bytes")
+  createdAt  DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("player_assets")
+}
+
+model DailySchedule {
+  id           String      @id @default(uuid()) @db.Uuid
+  screenId     String      @map("screen_id")
+  scheduleDate DateTime    @map("schedule_date") @db.Date
+  generatedAt  DateTime?   @default(now()) @map("generated_at") @db.Timestamptz(6)
+  slots        DailySlot[]
+
+  @@unique([screenId, scheduleDate])
+  @@map("daily_schedules")
+}
+
+model DailySlot {
+  id           String        @id @default(uuid()) @db.Uuid
+  scheduleId   String        @map("schedule_id") @db.Uuid
+  schedule     DailySchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  slotNumber   Int           @map("slot_number") // 1 to 8
+  campaignId   String?       @map("campaign_id") // Optional, could be null for default ad
+  assetUrl     String        @map("asset_url")
+  durationSec  Int           @map("duration_sec")
+  slotStart    DateTime      @map("slot_start") @db.Timestamptz(6)
+  slotEnd      DateTime      @map("slot_end") @db.Timestamptz(6)
+
+  @@index([scheduleId, slotNumber])
+  @@map("daily_slots")
 }

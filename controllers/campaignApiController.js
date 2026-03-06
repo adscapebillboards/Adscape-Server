@@ -1226,7 +1226,11 @@ const generateSlotsForBillboard = async (campaignId, billboard) => {
   try {
     const billboardId = billboard.id;
     const assetUrl = billboard.files?.[0];
-    const screen_id = billboard.screen_id;
+    let screen_id = billboard.screen_id || billboard.screenId;
+    if (!screen_id && billboardId) {
+      const dbBillboard = await prisma.billboard.findUnique({ where: { id: billboardId }, select: { screen_id: true } });
+      screen_id = dbBillboard?.screen_id || null;
+    }
     const { startDate, endDate } = billboard.bookingDetails;
     const durationSeconds = toSeconds(billboard.adDuration || billboard.bookingDetails?.duration || 10);
 
@@ -1533,7 +1537,11 @@ async function generateSlots(campaign) {
     const billboardId = String(billboard.id); // Ensure it's a string
     const assetUrl = billboard.files?.[0] || billboard.creative || "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png";
     // Extract screenId from billboard - check multiple possible field names
-    const screenId = billboard.screen_id || billboard.screenId || null;
+    let screenId = billboard.screen_id || billboard.screenId;
+    if (!screenId && billboardId) {
+      const dbBillboard = await prisma.billboard.findUnique({ where: { id: billboardId }, select: { screen_id: true } });
+      screenId = dbBillboard?.screen_id || null;
+    }
     // Dates can be in bookingDetails OR at top-level (depending on how the billboard was stored)
     const startDate = billboard.bookingDetails?.startDate || billboard.startDate || null;
     const endDate = billboard.bookingDetails?.endDate || billboard.endDate || null;

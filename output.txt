@@ -1,0 +1,53 @@
+Recent slots:
+[
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-19T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-18T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-17T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-16T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-15T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-14T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-13T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-12T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-11T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  },
+  {
+    screenId: '0449625468',
+    startDate: 2026-03-10T00:00:00.000Z,
+    assetUrl: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png'
+  }
+]

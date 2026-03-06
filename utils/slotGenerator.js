@@ -35,9 +35,13 @@ async function generateSlots(campaign) {
     for (const billboard of billboards) {
       const billboardId = billboard.id;
       const assetUrl = billboard.files?.[0];
-      const screen_id = billboard.screen_id;
+      let screen_id = billboard.screen_id || billboard.screenId;
+      if (!screen_id && billboardId) {
+        const dbBillboard = await prisma.billboard.findUnique({ where: { id: billboardId }, select: { screen_id: true } });
+        screen_id = dbBillboard?.screen_id || null;
+      }
       const { startDate, endDate } = billboard.bookingDetails;
-      
+
       // Extract asset scheduling information
       const assetScheduling = billboard.assetScheduling || {};
       const assetStartDate = assetScheduling.assetStartDate || startDate;
