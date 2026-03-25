@@ -7,6 +7,50 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret'; // set via .env in real apps
 
+const syncPublisherIdSequence = async () => {
+  const sequenceResult = await prisma.$queryRaw`
+    SELECT pg_get_serial_sequence('publishers', 'id') AS sequence_name
+  `;
+
+  const sequenceName = sequenceResult?.[0]?.sequence_name;
+  if (!sequenceName) {
+    logger.warn('Could not resolve publishers.id sequence name');
+    return false;
+  }
+
+  const maxIdResult = await prisma.$queryRaw`
+    SELECT COALESCE(MAX(id), 0) AS max_id
+    FROM publishers
+  `;
+
+  const maxId = Number(maxIdResult?.[0]?.max_id || 0);
+  await prisma.$executeRawUnsafe(
+    `SELECT setval($1, $2, false)`,
+    sequenceName,
+    maxId + 1
+  );
+
+  logger.info('Synchronized publishers.id sequence', {
+    sequenceName,
+    nextId: maxId + 1,
+  });
+
+  return true;
+};
+
+const insertPublisher = async ({ name, email, phone, location, joinDate, password }) => {
+  return prisma.publisher.create({
+    data: {
+      name,
+      email,
+      phone,
+      location,
+      joinDate,
+      password
+    }
+  });
+};
+
 exports.loginPublisher = async (req, res) => {
   const { email, password } = req.body;
 
@@ -89,16 +133,37 @@ exports.createPublisher = async (req, res) => {
       validJoinDate = new Date();
     }
 
-    const publisher = await prisma.publisher.create({
-      data: {
+    let publisher;
+    try {
+      publisher = await insertPublisher({
         name,
         email,
         phone,
         location,
         joinDate: validJoinDate,
         password: hashedPassword
+      });
+    } catch (createError) {
+      const duplicateId =
+        createError?.code === 'P2002' &&
+        Array.isArray(createError?.meta?.target) &&
+        createError.meta.target.includes('id');
+
+      if (!duplicateId) {
+        throw createError;
       }
-    });
+
+      logger.warn('Publisher create hit duplicate id, syncing sequence and retrying once');
+      await syncPublisherIdSequence();
+      publisher = await insertPublisher({
+        name,
+        email,
+        phone,
+        location,
+        joinDate: validJoinDate,
+        password: hashedPassword
+      });
+    }
 
     // Automatically create PublisherMetric entry
     try {

@@ -8,6 +8,7 @@ const prisma = require('./db/db');
 const pushRoutes = require('./routes/push');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
+const { getPlaylistForScreen } = require('./utils/socketHelpers');
 // Socket.IO setup
 const { Server } = require("socket.io");
 const server = http.createServer(app);
@@ -97,9 +98,36 @@ io.on('connection', (socket) => {
                     });
                     console.log(`[SOCKET] Emitted billboard-details for screen: ${screenId}`);
                 }
+
+                // Emit playlist and assets automatically on join
+                const { playlist, assets, date } = await getPlaylistForScreen(screenId);
+                socket.emit('playlist', { screenId, playlist, date });
+                socket.emit('assets', { screenId, assets });
+                console.log(`[SOCKET] Emitted playlist and assets for screen: ${screenId}`);
+
             } catch (err) {
-                console.error('[SOCKET] Error fetching billboard details for player-join:', err);
+                console.error('[SOCKET] Error fetching billboard details or playlist for player-join:', err);
             }
+        }
+    });
+
+    // Handle request for playlist
+    socket.on('request-playlist', async (data) => {
+        const screenId = data.screenId || data.machineId;
+        console.log(`[SOCKET] Playlist requested for screen: ${screenId}`);
+        if (screenId) {
+            const { playlist } = await getPlaylistForScreen(screenId);
+            socket.emit('playlist', { screenId, playlist });
+        }
+    });
+
+    // Handle request for assets
+    socket.on('request-assets', async (data) => {
+        const screenId = data.screenId || data.machineId;
+        console.log(`[SOCKET] Assets requested for screen: ${screenId}`);
+        if (screenId) {
+            const { assets } = await getPlaylistForScreen(screenId);
+            socket.emit('assets', { screenId, assets });
         }
     });
 

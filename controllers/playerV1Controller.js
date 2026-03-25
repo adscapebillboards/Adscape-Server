@@ -84,25 +84,48 @@ exports.getSchedule = async (req, res) => {
 
         const campaigns = await prisma.campaign.findMany({
             where: {
-                status: 'ACTIVE',
-                startDate: { lte: dayEnd },
+                status: { in: ['ACTIVE', 'LIVE', 'SCHEDULED'] },
+                startDate: { lte: new Date(dayEnd.getTime() + 6 * 60 * 60 * 1000) }, // +6h buffer for boundary campaigns
                 endDate: { gte: dayStart }
             }
         });
 
+        const billboard = await prisma.billboard.findFirst({
+            where: {
+                OR: [
+                    { id: String(screenId) },
+                    { screen_id: String(screenId) }
+                ]
+            }
+        });
+
+        // RESOLUTION: standardize on screen_id (machineId) if available
+        const resolvedScreenId = (billboard && billboard.screen_id) ? billboard.screen_id : String(screenId);
+        console.log(`[API] Resolving screenId ${screenId} -> ${resolvedScreenId}`);
+
+        const billboardIds = [resolvedScreenId];
+        if (billboard) {
+            billboardIds.push(String(billboard.id));
+            if (billboard.screen_id) billboardIds.push(String(billboard.screen_id));
+        }
+
         const activeCampaigns = campaigns.filter(c => {
             if (!c.billboards) return false;
-            const billboards = typeof c.billboards === 'string' ? JSON.parse(c.billboards) : c.billboards;
-            return billboards.some(b => String(b.id) === String(screenId) || String(b.screen_id) === String(screenId));
+            const bbs = typeof c.billboards === 'string' ? JSON.parse(c.billboards) : c.billboards;
+            return bbs.some(b => {
+                const bId = String(b.id || b.billboardId || "");
+                const bSid = String(b.screen_id || b.screenId || "");
+                return billboardIds.includes(bId) || billboardIds.includes(bSid);
+            });
         });
 
         let schedule = await prisma.dailySchedule.findFirst({
-            where: { screenId, scheduleDate }
+            where: { screenId: resolvedScreenId, scheduleDate }
         });
 
         if (!schedule) {
             schedule = await prisma.dailySchedule.create({
-                data: { screenId, scheduleDate }
+                data: { screenId: resolvedScreenId, scheduleDate }
             });
 
             const slotsData = [];
@@ -121,10 +144,13 @@ exports.getSchedule = async (req, res) => {
 
                     const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
                     const bb = bbs.find(b => String(b.id) === String(screenId) || String(b.screen_id) === String(screenId));
-                    if (bb && bb.video) {
-                        assetUrl = bb.video;
-                    } else if (bb && bb.images && bb.images.length > 0) {
-                        assetUrl = bb.images[0];
+                    if (bb) {
+                        assetUrl =
+                            (bb.files && bb.files.length > 0) ? bb.files[0] :
+                                (bb.creative) ? bb.creative :
+                                    (bb.images && bb.images.length > 0) ? bb.images[0] :
+                                        (billboard && billboard.images && billboard.images.length > 0) ? billboard.images[0] :
+                                            defaultUrl;
                     }
                 }
 
@@ -147,9 +173,36 @@ exports.getSchedule = async (req, res) => {
             orderBy: { slotNumber: 'asc' }
         });
 
+        // FIX: If any slots are using the default logo but the campaign now has real files, update them!
+        const defaultLogo = 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+        for (const slot of slots) {
+            if (slot.assetUrl === defaultLogo && slot.campaignId) {
+                const campaign = activeCampaigns.find(c => c.id === slot.campaignId);
+                if (campaign) {
+                    const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
+                    const bb = bbs.find(b => String(b.id) === String(screenId) || String(b.screen_id) === String(screenId));
+                    if (bb && bb.files && bb.files.length > 0) {
+                        const realAssetUrl = bb.files[0];
+                        await prisma.dailySlot.update({
+                            where: { id: slot.id },
+                            data: { assetUrl: realAssetUrl }
+                        });
+                        slot.assetUrl = realAssetUrl; // Update for response
+                    } else if (billboard && billboard.images && billboard.images.length > 0) {
+                        const realAssetUrl = billboard.images[0];
+                        await prisma.dailySlot.update({
+                            where: { id: slot.id },
+                            data: { assetUrl: realAssetUrl }
+                        });
+                        slot.assetUrl = realAssetUrl; // Update for response
+                    }
+                }
+            }
+        }
+
         res.json({
             screenId,
-            date,
+            date: scheduleDate.toISOString().split('T')[0], // YYYY-MM-DD
             timezone: 'Asia/Kolkata',
             slots: slots.map(s => ({
                 slot: s.slotNumber,

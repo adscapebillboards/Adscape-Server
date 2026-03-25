@@ -301,7 +301,35 @@ const attachCampaignFile = async (req, res) => {
       data: { billboards: updated }
     });
 
-    logger.info(`✅ Attached file to campaign ${campaignId}, billboard ${billboardId}: ${fileUrl}`);
+    // Update existing slots that might be using the default logo
+    const defaultLogo = "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png";
+
+    // Update GeneratedSlots
+    const updatedGenerated = await prisma.generatedSlot.updateMany({
+      where: {
+        campaignId: campaignId,
+        billboardId: String(billboardId),
+        assetUrl: defaultLogo
+      },
+      data: {
+        assetUrl: fileUrl
+      }
+    });
+
+    // Update DailySlots
+    const updatedDaily = await prisma.dailySlot.updateMany({
+      where: {
+        campaignId: campaignId,
+        assetUrl: defaultLogo
+        // Note: DailySlot doesn't have billboardId directly, but campaignId + logo check is safe enough
+        // especially if we only update those using the logo.
+      },
+      data: {
+        assetUrl: fileUrl
+      }
+    });
+
+    logger.info(`✅ Attached file to campaign ${campaignId}, billboard ${billboardId}. Updated ${updatedGenerated.count} GeneratedSlots and ${updatedDaily.count} DailySlots.`);
     res.json({ success: true, message: 'File attached successfully', campaignId, billboardId, fileUrl });
   } catch (err) {
     logger.error('Error attaching campaign file:', err);
@@ -1535,7 +1563,7 @@ async function generateSlots(campaign) {
 
   for (const billboard of billboards) {
     const billboardId = String(billboard.id); // Ensure it's a string
-    const assetUrl = billboard.files?.[0] || billboard.creative || "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png";
+    const assetUrl = (billboard.files && billboard.files.length > 0) ? billboard.files[0] : (billboard.creative || "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png");
     // Extract screenId from billboard - check multiple possible field names
     let screenId = billboard.screen_id || billboard.screenId;
     if (!screenId && billboardId) {
