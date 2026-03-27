@@ -440,7 +440,7 @@ model DailySlot {
   scheduleId   String        @map("schedule_id") @db.Uuid
   schedule     DailySchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
   slotNumber   Int           @map("slot_number") // 1 to 8
-  campaignId   String?       @map("campaign_id") // Optional, could be null for default ad
+  campaignId   String?       @map("campaign_id") // Optional
   assetUrl     String        @map("asset_url")
   durationSec  Int           @map("duration_sec")
   slotStart    DateTime      @map("slot_start") @db.Timestamptz(6)
@@ -449,3 +449,29 @@ model DailySlot {
   @@index([scheduleId, slotNumber])
   @@map("daily_slots")
 }
+
+model ScreenUsage {
+  id           Int      @id @default(autoincrement())
+  screenId     String   @map("screen_id")
+  sessionStart DateTime @map("session_start") @db.Timestamptz(6)
+  sessionEnd   DateTime? @map("session_end") @db.Timestamptz(6)
+  durationSec  Int      @default(0) @map("duration_sec")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([screenId])
+  @@map("screen_usage_logs")
+}
+
+model PlaybackStat {
+  id           Int      @id @default(autoincrement())
+  screenId     String   @map("screen_id")
+  assetId      String   @map("asset_id")
+  playCount    Int      @default(0) @map("play_count")
+  totalDuration Int     @default(0) @map("total_duration_sec")
+  lastPlayedAt DateTime @map("last_played_at") @db.Timestamptz(6)
+  syncDate     DateTime @default(now()) @map("sync_date") @db.Timestamptz(6)
+
+  @@index([screenId, assetId])
+  @@map("playback_stats_logs")
+}
+

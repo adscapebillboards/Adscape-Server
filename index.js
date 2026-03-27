@@ -9,6 +9,8 @@ const pushRoutes = require('./routes/push');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const { getPlaylistForScreen } = require('./utils/socketHelpers');
+const signageRoutes = require('./signage/signageRoutes');
+
 // Socket.IO setup
 const { Server } = require("socket.io");
 const server = http.createServer(app);
@@ -35,12 +37,12 @@ const io = new Server(server, {
     allowEIO3: true
 });
 
-// CORS is already configured in app-new.js
-// No need to add it again here as it would override the configuration
-
 // JSON parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Signage APIs (v3)
+app.use('/api/signage', signageRoutes);
 
 // Push Notifications APIs
 app.use('/api', pushRoutes);
