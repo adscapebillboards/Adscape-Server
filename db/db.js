@@ -21,16 +21,23 @@ if (!globalForPrisma.prisma) {
   const url = new URL(DATABASE_URL);
 
   const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
-  const defaultConnectionLimit = isServerless ? 2 : 10;
-  const defaultPoolTimeout = isServerless ? 10 : 20;
+  // Allow much larger pools for the long-running Node server while keeping
+  // serverless limits conservative to avoid exhausting DB connections.
+  const defaultConnectionLimit = isServerless ? 5 : 100;
+  const defaultPoolTimeout = isServerless ? 15 : 60;
   const limit = parseInt(process.env.DB_CONNECTION_LIMIT || String(defaultConnectionLimit), 10);
   const poolTimeout = parseInt(process.env.DB_POOL_TIMEOUT || String(defaultPoolTimeout), 10);
-  const connectTimeout = parseInt(process.env.DB_CONNECT_TIMEOUT || '10', 10);
+  const connectTimeout = parseInt(process.env.DB_CONNECT_TIMEOUT || '20', 10);
 
   url.searchParams.set('connection_limit', String(limit));
   url.searchParams.set('pool_timeout', String(poolTimeout));
   url.searchParams.set('connect_timeout', String(connectTimeout));
   if (!url.searchParams.has('sslmode')) url.searchParams.set('sslmode', 'require');
+
+  const safeUrl = `${url.protocol}//${url.hostname}:${url.port}${url.pathname}`;
+  console.log(`🔌 [DB] Initializing Prisma (${isServerless ? 'serverless' : 'server'})`);
+  console.log(`🔌 [DB] Target: ${safeUrl}`);
+  console.log(`🔌 [DB] Pool config: connection_limit=${limit}, pool_timeout=${poolTimeout}s, connect_timeout=${connectTimeout}s`);
 
   globalForPrisma.prisma = new PrismaClient({
     datasources: { db: { url: url.toString() } },
@@ -51,7 +58,6 @@ if (!globalForPrisma.prisma) {
   // does not compete with live traffic for a small connection pool.
   const logInterval = parseInt(process.env.DB_STATUS_LOG_INTERVAL_MS || '0', 10);
   if (!isServerless && logInterval > 0) {
-    const safeUrl = `${url.protocol}//${url.hostname}:${url.port}${url.pathname}`;
     const logStatus = async () => {
       try {
         const start = Date.now();
