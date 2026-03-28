@@ -14,6 +14,20 @@ if (GOOGLE_CLIENT_ID) {
   GOOGLE_CLIENT_ID = GOOGLE_CLIENT_ID.trim().replace(/^["']|["']$/g, '');
 }
 const upload = multer({ storage: multer.memoryStorage() });
+const EmailService = require('../services/emailService');
+
+// In-memory OTP store (email => { otp, expiresAt, verified })
+const otpStore = new Map();
+
+// Helper to clean expired OTPs periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [email, data] of otpStore.entries()) {
+    if (data.expiresAt < now) {
+      otpStore.delete(email);
+    }
+  }
+}, 60 * 1000);
 
 // Debug: Log client ID to verify it's loaded correctly
 console.log('🔑 Google Client ID loaded:', GOOGLE_CLIENT_ID ? `${GOOGLE_CLIENT_ID.substring(0, 20)}...` : 'NOT SET');
@@ -26,7 +40,9 @@ async function verifyGoogleToken(token) {
   try {
     const allowedAudiences = [
       GOOGLE_CLIENT_ID,
-      '566249475900-3inhmnhmeca6eanqt0rm63r2b4051bg6.apps.googleusercontent.com'
+      '566249475900-3inhmnhmeca6eanqt0rm63r2b4051bg6.apps.googleusercontent.com',
+      '566249475900-sppum3clkdu06i8hma6usli7391vfaao.apps.googleusercontent.com',
+      '184953752933-5k7uj0clahs4eh59v0g6tvcgcfotafuh.apps.googleusercontent.com'
     ];
 
     // Decode token to see audience without verification (for debugging)
@@ -248,6 +264,107 @@ router.post('/oauth/complete-profile', async (req, res) => {
   }
 });
 
+// Send OTP
+router.post('/send-otp', async (req, res) => {
+  const { email, purpose } = req.body; // purpose could be 'signup' or 'reset-password'
+  
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  try {
+    if (purpose === 'reset-password') {
+      const user = await prisma.user.findUnique({ where: { email } });
+      if (!user) {
+        return res.status(404).json({ error: 'User with this email not found' });
+      }
+    } else if (purpose === 'signup') {
+      const existingUser = await prisma.user.findUnique({ where: { email } });
+      if (existingUser) {
+        return res.status(400).json({ error: 'User already exists. Please sign in.' });
+      }
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Store in map
+    otpStore.set(email, {
+      otp,
+      expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes expiry
+      verified: false
+    });
+
+    const emailPurpose = purpose === 'signup' ? 'verify your account' : 'reset your password';
+    await EmailService.notifyOTP(email, otp, emailPurpose);
+
+    res.json({ message: 'OTP sent successfully' });
+  } catch (error) {
+    console.error('Send OTP Error:', error);
+    res.status(500).json({ error: 'Failed to send OTP' });
+  }
+});
+
+// Verify OTP
+router.post('/verify-otp', async (req, res) => {
+  const { email, otp } = req.body;
+  
+  if (!email || !otp) {
+    return res.status(400).json({ error: 'Email and OTP are required' });
+  }
+
+  const storedData = otpStore.get(email);
+  
+  if (!storedData) {
+    return res.status(400).json({ error: 'No OTP requested or OTP has expired' });
+  }
+  
+  if (Date.now() > storedData.expiresAt) {
+    otpStore.delete(email);
+    return res.status(400).json({ error: 'OTP has expired' });
+  }
+  
+  if (storedData.otp !== otp) {
+    return res.status(400).json({ error: 'Invalid OTP code' });
+  }
+  
+  // Mark as verified but don't delete yet, it will be needed for signup/password reset
+  storedData.verified = true;
+  res.json({ message: 'OTP verified successfully' });
+});
+
+// Reset Password
+router.post('/reset-password', async (req, res) => {
+  const { email, newPassword } = req.body;
+  
+  if (!email || !newPassword) {
+    return res.status(400).json({ error: 'Email and new password are required' });
+  }
+
+  const storedData = otpStore.get(email);
+  
+  if (!storedData || !storedData.verified) {
+    return res.status(403).json({ error: 'Email not verified. Please verify OTP first.' });
+  }
+
+  try {
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    
+    await prisma.user.update({
+      where: { email },
+      data: { password: hashedPassword }
+    });
+    
+    // Clear the OTP store for this user
+    otpStore.delete(email);
+    
+    res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('Password reset Error:', error);
+    res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
 // Sign up
 router.post('/signup', async (req, res) => {
   const { email, password, fullName, phoneNumber } = req.body; // ✅ add phoneNumber here
@@ -257,6 +374,12 @@ router.post('/signup', async (req, res) => {
 
 
   try {
+    // Check if the email was verified using OTP
+    const storedData = otpStore.get(email);
+    if (!storedData || !storedData.verified) {
+      return res.status(403).json({ error: 'Email not verified. Please verify OTP before signing up.' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
@@ -285,6 +408,9 @@ router.post('/signup', async (req, res) => {
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
 
     console.log('JWT_SECRET:', JWT_SECRET);
+    
+    // Clear OTP after successful signup
+    otpStore.delete(email);
 
     res.json({ token, user });
   } catch (err) {

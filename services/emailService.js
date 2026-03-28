@@ -389,8 +389,28 @@ campaignCreatedUser: (campaignData) => ({
       </div>
     </div>
   `
-})
+}),
 
+  // OTP Verification email
+  otpVerification: (data) => ({
+    subject: `🔐 Your OTP Verification Code: ${data.otp}`,
+    html: `
+      <div style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; max-width: 640px; margin: 0 auto; background-color: #f4f6fb; padding: 40px;">
+        <div style="background: linear-gradient(90deg, #7c3aed, #4f46e5); padding: 24px; border-radius: 14px 14px 0 0; text-align: center; color: #fff;">
+          <h2 style="margin: 0; font-size: 22px; font-weight: 600;">OTP Verification</h2>
+        </div>
+        <div style="background: #ffffff; padding: 30px; border-radius: 0 0 14px 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); text-align: center;">
+          <p style="font-size: 16px; margin-bottom: 20px;">Use the following OTP to ${data.purpose}. This OTP is valid for 10 minutes.</p>
+          <div style="background-color: #f8f9ff; padding: 20px; border-radius: 10px; border: 1px dashed #4f46e5; display: inline-block;">
+             <h1 style="color: #4f46e5; margin: 0; font-size: 36px; letter-spacing: 5px;">${data.otp}</h1>
+          </div>
+          <p style="color: #94a3b8; font-size: 13px; margin-top: 25px;">
+            If you did not request this OTP, please ignore this email.
+          </p>
+        </div>
+      </div>
+    `
+  })
 };
 
 class EmailService {
@@ -657,6 +677,24 @@ class EmailService {
       logger.info(`Campaign name update notification sent to ${superadminEmails.length} superadmin emails`);
     } catch (error) {
       logger.error('Error sending campaign name update notification:', error);
+    }
+  }
+
+  // Send OTP notification
+  static async notifyOTP(email, otp, purpose) {
+    // If running in development and notifications disabled, we can print to console to not block local dev:
+    if (!this.isEnabled()) {
+      logger.info(`Email notifications are disabled. Simulated OTP for ${email}: ${otp}`);
+      return { success: true };
+    }
+
+    try {
+      await this.sendEmail(email, 'otpVerification', { otp, purpose });
+      logger.info(`OTP sent successfully to: ${email}`);
+      return { success: true };
+    } catch (error) {
+      logger.error('Error sending OTP notification:', error);
+      return { success: false, error: error.message };
     }
   }
 }

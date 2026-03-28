@@ -1,5 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { generateSlots: sharedGenerateSlots } = require('../utils/slotGenerator');
 
 const createCampaign = async (req, res) => {
   try {
@@ -216,100 +217,12 @@ const updateBillboardStatus = async (req, res) => {
 // Generate slots for a specific billboard
 const generateSlotsForBillboard = async (campaignId, billboard) => {
   try {
-    const billboardId = billboard.id;
-    const assetUrl = billboard.files?.[0];
-    let screen_id = billboard.screen_id || billboard.screenId;
-    if (!screen_id && billboardId) {
-      const dbBillboard = await prisma.billboard.findUnique({ where: { id: billboardId }, select: { screen_id: true } });
-      screen_id = dbBillboard?.screen_id || null;
-    }
-    const { startDate, endDate } = billboard.bookingDetails;
-
-    logger.info(`Generating slots for billboard ${billboardId}:`, {
-      assetUrl,
-      screen_id,
-      startDate,
-      endDate,
-      files: billboard.files
+    await sharedGenerateSlots({
+      id: campaignId,
+      billboards: [billboard]
     });
 
-    if (!startDate || !endDate || !assetUrl) {
-      logger.warn(`Missing data for billboard ${billboardId}:`, {
-        hasStartDate: !!startDate,
-        hasEndDate: !!endDate,
-        hasAssetUrl: !!assetUrl
-      });
-      return;
-    }
-
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-
-    // Generate slots for each day in the booking period
-    for (
-      let current = new Date(start);
-      current <= end;
-      current.setDate(current.getDate() + 1)
-    ) {
-      const dateStr = current.toISOString().slice(0, 10);
-      // Skip if this campaign already created a slot for this billboard on this day
-      const existingForCampaign = await prisma.generatedSlot.findFirst({
-        where: {
-          billboardId,
-          campaignId,
-          startDate: {
-            gte: new Date(`${dateStr}T00:00:00Z`),
-            lte: new Date(`${dateStr}T23:59:59Z`)
-          }
-        }
-      });
-      if (existingForCampaign) {
-        logger.slot(`Skipped: campaign ${campaignId} already has a slot for billboard ${billboardId} on ${dateStr}`);
-        continue;
-      }
-
-      // Enforce max 8 slots per billboard per day overall
-      const totalSlotsThisDay = await prisma.generatedSlot.count({
-        where: {
-          billboardId,
-          startDate: {
-            gte: new Date(`${dateStr}T00:00:00Z`),
-            lte: new Date(`${dateStr}T23:59:59Z`)
-          }
-        }
-      });
-      if (totalSlotsThisDay >= 8) {
-        logger.slot(`Skipped: billboard ${billboardId} already has 8 slots on ${dateStr}`);
-        continue;
-      }
-
-      const slotNumber = totalSlotsThisDay + 1;
-      const slotStart = new Date(`${dateStr}T00:00:00Z`);
-      const slotEnd = new Date(`${dateStr}T23:59:59Z`);
-
-      const durationSeconds = (() => {
-        const d = billboard.assetScheduling?.duration || billboard.adDuration || 15;
-        const n = Number(d);
-        return Number.isFinite(n) && n > 0 ? n : 15;
-      })();
-
-      await prisma.generatedSlot.create({
-        data: {
-          campaignId,
-          billboardId,
-          assetUrl,
-          startDate: slotStart,
-          endDate: slotEnd,
-          duration: durationSeconds,
-          slotNumber,
-          screenId: screen_id
-        }
-      });
-
-      logger.slot(`Slot #${slotNumber} created for billboard ${billboardId} on ${dateStr}`);
-    }
-
-    logger.info(`Slot generation completed for billboard ${billboardId}`);
+    logger.info(`Slot generation completed for billboard ${billboard.id}`);
   } catch (error) {
     logger.error(`Error generating slots for billboard ${billboard.id}:`, error);
     throw error;

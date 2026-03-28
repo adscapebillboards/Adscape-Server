@@ -31,6 +31,10 @@ const GOOGLE_CLIENT_IDS = [
   '566249475900-jpqs3cjm0n1ikj56mgocsgm6lm2161u5.apps.googleusercontent.com',
   // Admin web panel client ID (hardcoded in Admin/src/config/googleOAuth.ts)
   '184953752933-5k7uj0clahs4eh59v0g6tvcgcfotafuh.apps.googleusercontent.com',
+  // Client web app ID
+  '566249475900-3inhmnhmeca6eanqt0rm63r2b4051bg6.apps.googleusercontent.com',
+  // Admin Env ID
+  '566249475900-sppum3clkdu06i8hma6usli7391vfaao.apps.googleusercontent.com',
 ].filter(Boolean);
 
 // Initialize Google OAuth client (for id_token verification)

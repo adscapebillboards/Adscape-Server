@@ -390,23 +390,32 @@ const generateSlotsForBillboard = async (campaignId, billboard) => {
     ) {
       const dateStr = current.toISOString().slice(0, 10);
 
-      // Check if we already have slots for this date
-      const existingSlots = await prisma.generatedSlot.count({
+      const occupiedSlots = await prisma.generatedSlot.findMany({
         where: {
           billboardId,
-          campaignId,
           startDate: {
             gte: new Date(`${dateStr}T00:00:00Z`),
             lt: new Date(`${dateStr}T23:59:59Z`)
           }
-        }
+        },
+        select: { slotNumber: true },
+        orderBy: { slotNumber: 'asc' }
       });
 
-      // Generate up to 8 slots per day
-      const slotsToGenerate = Math.min(8 - existingSlots, 8);
+      const usedSlotNumbers = new Set(
+        occupiedSlots
+          .map((slot) => slot.slotNumber)
+          .filter((slotNumber) => Number.isInteger(slotNumber))
+      );
 
-      for (let i = 0; i < slotsToGenerate; i++) {
-        const slotNumber = existingSlots + i + 1;
+      const availableSlotNumbers = [];
+      for (let slotNumber = 1; slotNumber <= 8; slotNumber += 1) {
+        if (!usedSlotNumbers.has(slotNumber)) {
+          availableSlotNumbers.push(slotNumber);
+        }
+      }
+
+      for (const slotNumber of availableSlotNumbers) {
         const slotStart = new Date(`${dateStr}T00:00:00Z`);
         const slotEnd = new Date(`${dateStr}T23:59:59Z`);
 
