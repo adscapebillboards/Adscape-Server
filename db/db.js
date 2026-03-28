@@ -20,14 +20,16 @@ const globalForPrisma = global;
 if (!globalForPrisma.prisma) {
   const url = new URL(DATABASE_URL);
 
-  // Keep connection limit very low — RDS free/small tier has few available slots.
-  // Repeated server restarts during dev leave zombie connections; a low cap prevents exhaustion.
-  // Serverless (Vercel/Lambda): 2 connections max. Local dev: 2 connections max.
   const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
-  const limit = 2;
+  const defaultConnectionLimit = isServerless ? 2 : 10;
+  const defaultPoolTimeout = isServerless ? 10 : 20;
+  const limit = parseInt(process.env.DB_CONNECTION_LIMIT || String(defaultConnectionLimit), 10);
+  const poolTimeout = parseInt(process.env.DB_POOL_TIMEOUT || String(defaultPoolTimeout), 10);
+  const connectTimeout = parseInt(process.env.DB_CONNECT_TIMEOUT || '10', 10);
+
   url.searchParams.set('connection_limit', String(limit));
-  url.searchParams.set('pool_timeout', '5');  // fail fast instead of queueing
-  url.searchParams.set('connect_timeout', '10');
+  url.searchParams.set('pool_timeout', String(poolTimeout));
+  url.searchParams.set('connect_timeout', String(connectTimeout));
   if (!url.searchParams.has('sslmode')) url.searchParams.set('sslmode', 'require');
 
   globalForPrisma.prisma = new PrismaClient({
@@ -45,8 +47,9 @@ if (!globalForPrisma.prisma) {
   process.once('SIGINT', () => { disconnect(); process.exit(0); });
   process.once('SIGTERM', () => { disconnect(); process.exit(0); });
 
-  // Log connection status periodically (skip in serverless - no long-running process)
-  const logInterval = parseInt(process.env.DB_STATUS_LOG_INTERVAL_MS || '5000', 10);
+  // Optional connection status logging for debugging. Disabled by default so it
+  // does not compete with live traffic for a small connection pool.
+  const logInterval = parseInt(process.env.DB_STATUS_LOG_INTERVAL_MS || '0', 10);
   if (!isServerless && logInterval > 0) {
     const safeUrl = `${url.protocol}//${url.hostname}:${url.port}${url.pathname}`;
     const logStatus = async () => {
@@ -60,7 +63,8 @@ if (!globalForPrisma.prisma) {
       }
     };
     logStatus(); // immediate first log
-    setInterval(logStatus, logInterval);
+    const interval = setInterval(logStatus, logInterval);
+    if (typeof interval.unref === 'function') interval.unref();
   }
 }
 

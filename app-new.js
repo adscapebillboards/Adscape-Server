@@ -122,50 +122,72 @@ const allowedOrigins = new Set([
   'https://bmi-client.onrender.com',
 ]);
 
+const normalizeOrigin = (origin) => origin?.replace(/\/$/, '');
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  return allowedOrigins.has(normalizeOrigin(origin));
+};
 
+const corsAllowedHeaders = [
+  'Content-Type',
+  'Authorization',
+  'X-Requested-With',
+  'Accept',
+  'Accept-Language',
+  'Accept-Encoding',
+  'Origin',
+  'Referer',
+  'User-Agent',
+  'Cache-Control',
+  'Pragma',
+  'Expires',
+  'If-Modified-Since',
+  'If-None-Match',
+  'If-Range',
+  'Range',
+  'X-CSRF-Token',
+  'ngrok-skip-browser-warning',
+  'Last-Modified',
+  'ETag',
+  'Date'
+];
 
-// CORS configuration - permissive for development
-// Allow all headers to avoid CORS issues with browser-sent headers
+// Set CORS response headers explicitly so serverless/CDN responses consistently
+// include them for allowed origins, including OPTIONS and cached responses.
+app.use((req, res, next) => {
+  const requestOrigin = normalizeOrigin(req.headers.origin);
+
+  if (isAllowedOrigin(requestOrigin)) {
+    if (requestOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    }
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
+
+    const requestedHeaders = req.headers['access-control-request-headers'];
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      requestedHeaders || corsAllowedHeaders.join(', ')
+    );
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Authorization');
+  }
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(isAllowedOrigin(requestOrigin) ? 200 : 403);
+  }
+
+  next();
+});
+
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, file:// like Electron)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.has(origin)) return callback(null, true);
-    return callback(null, false);
-  },
+  origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
-  // Don't restrict headers - allow all headers sent by browser
-  // This prevents CORS errors from browser-added headers like cache-control, pragma, expires, etc.
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',
-    'Accept',
-    'Accept-Language',
-    'Accept-Encoding',
-    'Origin',
-    'Referer',
-    'User-Agent',
-    'Cache-Control',
-    'Pragma',
-    'Expires',
-    'If-Modified-Since',
-    'If-None-Match',
-    'If-Range',
-    'Range',
-    'X-CSRF-Token',
-    'ngrok-skip-browser-warning',
-    'Last-Modified',
-    'ETag',
-    'Date'
-  ],
+  allowedHeaders: corsAllowedHeaders,
   exposedHeaders: ['Content-Length', 'Content-Type', 'Authorization'],
   preflightContinue: false,
-  optionsSuccessStatus: 200,
-  // Critical: Vary: Origin ensures browsers/CDNs cache CORS responses per-origin.
-  // Without this, a cached 304 for adscape.co.in can incorrectly be served to admin.adscape.co.in.
-  vary: true
+  optionsSuccessStatus: 200
 }));
 
 // Request logging middleware

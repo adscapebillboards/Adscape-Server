@@ -134,20 +134,6 @@ const createCampaign = async (req, res) => {
 
     logger.info(`Campaign ${campaignId}: creating DB record with ${enrichedBillboards.length} billboards (files will be attached asynchronously)`);
 
-    // Test database connection before attempting to save
-    try {
-      await prisma.$connect();
-      logger.info('✅ Database connection verified');
-    } catch (dbError) {
-      logger.error('❌ Database connection failed:', dbError.message);
-      logger.error('⚠️  Campaign cannot be saved. Please check database connectivity.');
-      return res.status(503).json({
-        error: 'Database unavailable',
-        message: 'Cannot save campaign. Database server is unreachable. Please check your connection and try again.',
-        details: 'The database server at adscape-database.postgres.database.azure.com:5432 cannot be reached. Please verify Azure firewall rules and network connectivity.'
-      });
-    }
-
     try {
       const { parseDateAsUTC } = require('../utils/timeUtils');
       await prisma.campaign.create({
@@ -200,9 +186,6 @@ const createCampaign = async (req, res) => {
     // Notifications: to superadmin and campaign owner
     // Only create notifications if database is available
     try {
-      // Test connection before creating notifications
-      await prisma.$connect();
-
       await prisma.$executeRawUnsafe(
         "INSERT INTO notifications (recipient_role, type, title, message, entity_type, entity_id) VALUES ('superadmin', $1, $2, $3, $4, $5)",
         'CAMPAIGN_CREATED',

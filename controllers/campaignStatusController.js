@@ -157,20 +157,6 @@ const updateAllCampaignsStatusByDate = async () => {
   try {
     logger.info('Starting batch update of all campaigns status by date');
     
-    // Test database connection first
-    try {
-      await prisma.$connect();
-      logger.info('✅ Database connection established');
-    } catch (connectError) {
-      logger.error('❌ Database connection failed:', connectError.message);
-      logger.error('⚠️  Troubleshooting steps:');
-      logger.error('   1. Check if Azure PostgreSQL server is running');
-      logger.error('   2. Verify your IP is added to Azure firewall rules');
-      logger.error('   3. Check network connectivity to adscape-database.postgres.database.azure.com:5432');
-      logger.error('   4. Verify DATABASE_URL in .env file is correct');
-      throw new Error('Database connection unavailable. Please check Azure firewall rules and network connectivity.');
-    }
-    
     // Get only campaigns that are PAYMENT_COMPLETED or later
     // This ensures we don't accidentally update campaigns that are still pending approval
     const campaigns = await prisma.campaign.findMany({

@@ -9,28 +9,36 @@ router.get('/', auth, async (req, res) => {
     const { onlyUnread } = req.query;
     const user = req.user;
 
-    let where = '1=1';
-    const params = [];
+    const where = {};
 
-    if (user.role === 'superadmin') {
-      // show all notifications for superadmin
-    } else {
-      where += ' AND (recipient_email = $1 OR recipient_role = $2)';
-      params.push(user.email);
-      params.push(user.role);
+    if (user.role !== 'superadmin') {
+      where.OR = [
+        { recipient_email: user.email },
+        { recipient_role: user.role }
+      ];
     }
 
     if (onlyUnread === 'true') {
-      where += ' AND is_read = FALSE';
+      where.is_read = false;
     }
 
-    const rows = await prisma.$queryRawUnsafe(`
-      SELECT id, recipient_email, recipient_role, type, title, message, entity_type, entity_id, is_read, created_at
-      FROM notifications
-      WHERE ${where}
-      ORDER BY created_at DESC
-      LIMIT 50
-    `, ...params);
+    const rows = await prisma.notifications.findMany({
+      where,
+      orderBy: { created_at: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        recipient_email: true,
+        recipient_role: true,
+        type: true,
+        title: true,
+        message: true,
+        entity_type: true,
+        entity_id: true,
+        is_read: true,
+        created_at: true
+      }
+    });
 
     res.json({ notifications: rows });
   } catch (e) {
@@ -42,8 +50,26 @@ router.get('/', auth, async (req, res) => {
 // Mark as read
 router.post('/:id/read', auth, async (req, res) => {
   try {
-    const { id } = req.params;
-    await prisma.$executeRawUnsafe('UPDATE notifications SET is_read = TRUE WHERE id = $1', Number(id));
+    const id = Number(req.params.id);
+    const user = req.user;
+    const where = { id };
+
+    if (user.role !== 'superadmin') {
+      where.OR = [
+        { recipient_email: user.email },
+        { recipient_role: user.role }
+      ];
+    }
+
+    const result = await prisma.notifications.updateMany({
+      where,
+      data: { is_read: true }
+    });
+
+    if (result.count === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
     res.json({ success: true });
   } catch (e) {
     console.error('Error marking notification read:', e);
