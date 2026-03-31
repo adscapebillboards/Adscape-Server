@@ -61,19 +61,26 @@ const createCampaign = async (req, res) => {
           return res.status(400).json({ error: 'Invalid billboards JSON' });
         }
       }
+      let assets = req.body.assets;
+      if (typeof assets === 'string') {
+        try { assets = JSON.parse(assets); } catch (e) { assets = []; }
+      } else if (!assets) {
+        assets = [];
+      }
       campaignData = {
         userName: req.body.userName,
         campaignName: req.body.campaignName,
         startDate: req.body.startDate,
         endDate: req.body.endDate,
         totalAmount: req.body.totalAmount,
-        billboards
+        billboards,
+        assets
       };
     } else {
       return res.status(400).json({ error: 'Missing campaign data.' });
     }
 
-    const { userName, billboards, campaignName } = campaignData;
+    const { userName, billboards, campaignName, assets = [] } = campaignData;
     if (!userName || !billboards || !Array.isArray(billboards)) {
       return res.status(400).json({ error: 'Missing required fields: userName and billboards array' });
     }
@@ -146,7 +153,8 @@ const createCampaign = async (req, res) => {
           totalAmount,
           startDate: parseDateAsUTC(startDate),
           endDate: parseDateAsUTC(endDate),
-          billboards: enrichedBillboards
+          billboards: enrichedBillboards,
+          assets
         }
       });
       logger.info('✅ Campaign saved to database successfully');
@@ -280,9 +288,22 @@ const attachCampaignFile = async (req, res) => {
       }
     }
 
+    // Also update campaign assets list
+    let assets = campaign.assets;
+    if (typeof assets === 'string') {
+      try { assets = JSON.parse(assets); } catch { assets = []; }
+    }
+    if (!Array.isArray(assets)) assets = [];
+    if (!assets.includes(fileUrl)) {
+      assets.push({ billboardId: String(billboardId), url: fileUrl });
+    }
+
     await prisma.campaign.update({
       where: { id: campaignId },
-      data: { billboards: updated }
+      data: { 
+        billboards: updated,
+        assets: assets
+      }
     });
 
     // Update existing slots that might be using the default logo

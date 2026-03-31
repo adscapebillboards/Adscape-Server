@@ -79,49 +79,64 @@ async function getPlaylistForScreen(screenId) {
             });
             console.log(`[SOCKET_HELPER] Filtered to ${activeCampaigns.length} active campaigns for this screen`);
 
-            schedule = await prisma.dailySchedule.create({
-                data: { screenId: String(screenId), scheduleDate }
+            schedule = await prisma.dailySchedule.upsert({
+                where: {
+                    screenId_scheduleDate: {
+                        screenId: resolvedScreenId,
+                        scheduleDate
+                    }
+                },
+                update: {},
+                create: { screenId: resolvedScreenId, scheduleDate }
             });
-            console.log(`[SOCKET_HELPER] Created new DailySchedule: ${schedule.id}`);
+            console.log(`[SOCKET_HELPER] Ensured DailySchedule exists: ${schedule.id}`);
 
             const defaultAsset = await prisma.defaultAsset.findFirst({ where: { isActive: true } });
             const defaultUrl = defaultAsset ? defaultAsset.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
 
-            const slotsData = [];
-            let rrIndex = 0;
-            for (let i = 1; i <= 8; i++) {
-                let campaignId = null;
-                let assetUrl = defaultUrl;
+            const existingSlotCount = await prisma.dailySlot.count({
+                where: { scheduleId: schedule.id }
+            });
 
-                if (activeCampaigns.length > 0) {
-                    const campaign = activeCampaigns[rrIndex];
-                    rrIndex = (rrIndex + 1) % activeCampaigns.length;
-                    campaignId = campaign.id;
+            if (existingSlotCount === 0) {
+                const slotsData = [];
+                let rrIndex = 0;
+                for (let i = 1; i <= 8; i++) {
+                    let campaignId = null;
+                    let assetUrl = defaultUrl;
 
-                    const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
-                    const bb = bbs.find(b => {
-                        const bId = String(b.id || b.billboardId || "");
-                        const bSid = String(b.screen_id || b.screenId || "");
-                        return billboardIds.includes(bId) || billboardIds.includes(bSid);
-                    });
+                    if (activeCampaigns.length > 0) {
+                        const campaign = activeCampaigns[rrIndex];
+                        rrIndex = (rrIndex + 1) % activeCampaigns.length;
+                        campaignId = campaign.id;
 
-                    if (bb) {
-                        assetUrl = (bb.files && bb.files.length > 0) ? bb.files[0] : (bb.creative || bb.images?.[0] || defaultUrl);
+                        const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
+                        const bb = bbs.find(b => {
+                            const bId = String(b.id || b.billboardId || "");
+                            const bSid = String(b.screen_id || b.screenId || "");
+                            return billboardIds.includes(bId) || billboardIds.includes(bSid);
+                        });
+
+                        if (bb) {
+                            assetUrl = (bb.files && bb.files.length > 0) ? bb.files[0] : (bb.creative || bb.images?.[0] || defaultUrl);
+                        }
                     }
-                }
 
-                slotsData.push({
-                    scheduleId: schedule.id,
-                    slotNumber: i,
-                    campaignId: campaignId,
-                    assetUrl: assetUrl,
-                    durationSec: 15,
-                    slotStart: new Date(),
-                    slotEnd: new Date()
-                });
+                    slotsData.push({
+                        scheduleId: schedule.id,
+                        slotNumber: i,
+                        campaignId: campaignId,
+                        assetUrl: assetUrl,
+                        durationSec: 15,
+                        slotStart: new Date(),
+                        slotEnd: new Date()
+                    });
+                }
+                await prisma.dailySlot.createMany({ data: slotsData });
+                console.log(`[SOCKET_HELPER] Created ${slotsData.length} slots`);
+            } else {
+                console.log(`[SOCKET_HELPER] Schedule ${schedule.id} already has ${existingSlotCount} slots. Skipping slot generation.`);
             }
-            await prisma.dailySlot.createMany({ data: slotsData });
-            console.log(`[SOCKET_HELPER] Created ${slotsData.length} slots`);
         }
 
         // 3. Fetch slots for the schedule

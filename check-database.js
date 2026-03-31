@@ -14,7 +14,7 @@ const checkDatabase = async () => {
     // Check if superadmin table exists
     console.log('\n2. Checking superadmin table...');
     try {
-      const superadmins = await prisma.superAdmin.findMany({
+      const superadmins = await prisma.publisher.findMany({
         take: 1
       });
       console.log('✅ SuperAdmin table exists and is accessible');
@@ -26,7 +26,7 @@ const checkDatabase = async () => {
     // Check table structure by trying to create a test record
     console.log('\n3. Testing table structure...');
     try {
-      const testUser = await prisma.superAdmin.create({
+      const testUser = await prisma.publisher.create({
         data: {
           email: 'test@example.com',
           password: 'hashedpassword',
@@ -41,7 +41,7 @@ const checkDatabase = async () => {
       console.log(`   Created test user with ID: ${testUser.id}`);
 
       // Clean up test user
-      await prisma.superAdmin.delete({
+      await prisma.publisher.delete({
         where: { id: testUser.id }
       });
       console.log('   Test user cleaned up');
@@ -53,7 +53,7 @@ const checkDatabase = async () => {
     // Check if there are any existing superadmin users
     console.log('\n4. Checking existing superadmin users...');
     try {
-      const allSuperadmins = await prisma.superAdmin.findMany({
+      const allSuperadmins = await prisma.publisher.findMany({
         select: {
           id: true,
           email: true,

@@ -47,6 +47,7 @@ const playerRoutes = require('./routes/players');
 const playerV1Routes = require('./routes/playerV1Routes');
 const availabilityRoutes = require('./routes/availability');
 const adscapeRoutes = require('./routes/adscapeRoutes');
+const signageRoutes = require('./signage/signageRoutes');
 const prisma = require('./db/db');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
@@ -103,6 +104,7 @@ app.set('io', io);
 
 // Middleware
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 const allowedOrigins = new Set([
   'http://localhost:3000',
@@ -373,6 +375,7 @@ app.use('/api/bmi', bmiRoutes);
 
 // Adscape routes
 app.use('/api', adscapeRoutes);
+app.use('/api/signage', signageRoutes);
 
 // Serve static files from public directory
 app.use(express.static(path.join(__dirname, 'public')));

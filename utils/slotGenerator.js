@@ -1,5 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { getDeveloperMode } = require('./developerMode');
 
 function parseDateInput(value) {
   if (!value) return null;
@@ -93,8 +94,10 @@ async function resolveBillboardMetadata(billboardId) {
 async function generateSlots(campaign) {
   try {
     const billboards = campaign.billboards;
+    const developerModeEnabled = await getDeveloperMode();
 
     logger.info('Starting slot generation for campaign:', campaign.id);
+    logger.info('Developer mode state for slot generation:', developerModeEnabled);
 
     if (!Array.isArray(billboards)) {
       logger.warn('Billboards data missing or not an array', { billboards });
@@ -133,6 +136,21 @@ async function generateSlots(campaign) {
         continue;
       }
 
+      let effectiveStartDate = startDate;
+      if (developerModeEnabled) {
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0);
+
+        if (today < effectiveStartDate) {
+          logger.info(`Developer mode active: shifting slot generation start for billboard ${billboardId} to today`, {
+            campaignId: campaign.id,
+            originalStartDate: effectiveStartDate.toISOString(),
+            effectiveStartDate: today.toISOString()
+          });
+          effectiveStartDate = today;
+        }
+      }
+
       const dbBillboard = await resolveBillboardMetadata(billboardId);
       const screenId = billboard.screen_id || billboard.screenId || dbBillboard?.screen_id || null;
       const maxSlotsPerDay = toPositiveInt(
@@ -141,7 +159,7 @@ async function generateSlots(campaign) {
       );
       const duration = toPositiveInt(billboard.assetScheduling?.duration || billboard.adDuration, 15);
 
-      const dateKeys = enumerateDateKeys(startDate, endDate);
+      const dateKeys = enumerateDateKeys(effectiveStartDate, endDate);
       if (dateKeys.length === 0) {
         continue;
       }

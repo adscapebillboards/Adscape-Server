@@ -35,104 +35,79 @@ const updateCampaignStatusByDate = async (campaignId) => {
       return null;
     }
 
-    const now = getCurrentISTTime(); // Use IST time instead of UTC
-    let campaignStatus = campaign.status;
-    let updatedBillboards = [];
+    const currentStatus = (campaign.status || '').toUpperCase();
+    const now = getCurrentISTTime();
     let hasChanges = false;
+    let updatedBillboards = [];
 
-    // Check each billboard's booking dates
-    for (let i = 0; i < billboards.length; i++) {
-      const billboard = billboards[i];
-      
-      if (!billboard.bookingDetails) {
-        logger.warn(`No booking details found for billboard: ${billboard.id}`);
-        continue;
-      }
-
-      const startDate = getStartOfDayIST(billboard.bookingDetails.startDate);
-      const endDate = getEndOfDayIST(billboard.bookingDetails.endDate);
-      let billboardStatus = billboard.status;
-
-      // Only update to SCHEDULED/LIVE/COMPLETED if campaign is approved and payment completed
-    // Campaign lifecycle: PENDING -> APPROVED -> PAYMENT_PENDING -> PAYMENT_COMPLETED -> SCHEDULED -> LIVE -> COMPLETED
-    const canSchedule = campaign.status === 'PAYMENT_COMPLETED' || 
-                        campaign.status === 'SCHEDULED' || 
-                        campaign.status === 'LIVE' || 
-                        campaign.status === 'COMPLETED';
-    
-    if (!canSchedule) {
-      // Campaign hasn't been approved or payment isn't completed, don't change status
-      logger.info(`⏭️ Campaign ${campaignId} is in ${campaign.status} status. Skipping date-based status update.`);
-      logger.info(`ℹ️ Campaign must be in PAYMENT_COMPLETED, SCHEDULED, LIVE, or COMPLETED status to be updated by date.`);
+    // Valid statuses that can undergo date-based transitions
+    const validPrecursors = ['APPROVED', 'PAYMENT_COMPLETED', 'SCHEDULED', 'LIVE', 'COMPLETED'];
+    if (!validPrecursors.includes(currentStatus)) {
+      logger.info(`⏭️ Campaign ${campaignId} is in ${currentStatus} status. Skipping date-based status update.`);
       return {
         campaign,
         updatedBillboards: [],
         statusChanged: false,
-        reason: `Campaign must be PAYMENT_COMPLETED before scheduling. Current status: ${campaign.status}`
+        reason: `Campaign status ${currentStatus} is not eligible for date-based scheduling.`
       };
     }
 
-    // Determine billboard status based on dates (using IST time) - only for approved and paid campaigns
-    if (now < startDate) {
-      billboardStatus = 'SCHEDULED';
-    } else if (now >= startDate && now <= endDate) {
-      billboardStatus = 'LIVE';
-    } else if (now > endDate) {
-      billboardStatus = 'COMPLETED';
-    }
+    // Check each billboard's booking dates
+    for (let i = 0; i < billboards.length; i++) {
+        const billboard = billboards[i];
+        if (!billboard.bookingDetails || !billboard.bookingDetails.startDate) {
+            continue;
+        }
 
-      // Update billboard status if it has changed
-      if (billboardStatus !== billboard.status) {
-        logger.info(`Updating billboard ${billboard.id} status from ${billboard.status} to ${billboardStatus}`);
+        const startDate = getStartOfDayIST(billboard.bookingDetails.startDate);
+        const endDate = getEndOfDayIST(billboard.bookingDetails.endDate || billboard.bookingDetails.startDate);
         
-        billboards[i].status = billboardStatus;
-        updatedBillboards.push(billboard);
-        hasChanges = true;
-      }
+        let billboardStatus = (billboard.status || '').toUpperCase();
+        let newBillboardStatus = billboardStatus;
+
+        if (now < startDate) {
+            newBillboardStatus = 'SCHEDULED';
+        } else if (now >= startDate && now <= endDate) {
+            newBillboardStatus = 'LIVE';
+        } else if (now > endDate) {
+            newBillboardStatus = 'COMPLETED';
+        }
+
+        if (newBillboardStatus !== billboardStatus) {
+            logger.info(`Updating billboard ${billboard.id || i} status: ${billboardStatus} -> ${newBillboardStatus}`);
+            billboards[i].status = newBillboardStatus;
+            updatedBillboards.push(billboards[i]);
+            hasChanges = true;
+        }
     }
 
-    // Determine overall campaign status based on billboard statuses
-    // Only update to SCHEDULED/LIVE/COMPLETED if campaign is already PAYMENT_COMPLETED or later
-    const billboardStatuses = billboards.map(b => b.status);
-    const hasLiveBillboards = billboardStatuses.includes('LIVE');
-    const hasScheduledBillboards = billboardStatuses.includes('SCHEDULED');
-    const allCompleted = billboardStatuses.every(status => status === 'COMPLETED');
-    const allScheduled = billboardStatuses.every(status => status === 'SCHEDULED');
+    // Determine overall campaign status
+    const billboardStatuses = billboards.map(b => (b.status || '').toUpperCase());
+    const hasLive = billboardStatuses.includes('LIVE');
+    const allCompleted = billboardStatuses.length > 0 && billboardStatuses.every(s => s === 'COMPLETED');
+    const allScheduled = billboardStatuses.length > 0 && billboardStatuses.every(s => s === 'SCHEDULED');
 
-    let newCampaignStatus = campaignStatus;
-
-    // Only update status if campaign is in PAYMENT_COMPLETED or later stage
-    if (campaignStatus === 'PAYMENT_COMPLETED' || campaignStatus === 'SCHEDULED' || campaignStatus === 'LIVE' || campaignStatus === 'COMPLETED') {
-      if (hasLiveBillboards) {
+    let newCampaignStatus = currentStatus;
+    if (hasLive) {
         newCampaignStatus = 'LIVE';
-      } else if (allCompleted) {
+    } else if (allCompleted) {
         newCampaignStatus = 'COMPLETED';
-      } else if (allScheduled || hasScheduledBillboards) {
+    } else if (allScheduled) {
         newCampaignStatus = 'SCHEDULED';
-      }
     }
-    // If campaign is not yet approved/paid, keep current status (PENDING, APPROVED, PAYMENT_PENDING, etc.)
 
     // Update campaign if there are changes
-    if (hasChanges || newCampaignStatus !== campaign.status) {
-      logger.info(`Updating campaign ${campaignId} status from ${campaign.status} to ${newCampaignStatus}`);
+    if (hasChanges || newCampaignStatus !== currentStatus) {
+      logger.info(`Updating campaign ${campaignId} status: ${currentStatus} -> ${newCampaignStatus}`);
       
-      const updateData = {
-        status: newCampaignStatus
-      };
-
-      // Only update billboards if there were changes
-      if (hasChanges) {
-        updateData.billboards = billboards;
-      }
-
       const updatedCampaign = await prisma.campaign.update({
         where: { id: campaignId },
-        data: updateData
+        data: {
+          status: newCampaignStatus,
+          billboards: billboards // Always sync the JSON billboards if their status changed
+        }
       });
 
-      logger.campaign('Campaign status updated by date', `Campaign ID: ${campaignId}, New Status: ${newCampaignStatus}`);
-      
       return {
         campaign: updatedCampaign,
         updatedBillboards,
@@ -157,12 +132,11 @@ const updateAllCampaignsStatusByDate = async () => {
   try {
     logger.info('Starting batch update of all campaigns status by date');
     
-    // Get only campaigns that are PAYMENT_COMPLETED or later
-    // This ensures we don't accidentally update campaigns that are still pending approval
+    // Get only campaigns that are APPROVED, PAYMENT_COMPLETED or later
     const campaigns = await prisma.campaign.findMany({
       where: {
         status: {
-          in: ['PAYMENT_COMPLETED', 'SCHEDULED', 'LIVE', 'COMPLETED']
+          in: ['APPROVED', 'PAYMENT_COMPLETED', 'SCHEDULED', 'LIVE', 'COMPLETED']
         }
       }
     });

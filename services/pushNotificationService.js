@@ -7,8 +7,6 @@ const admin = require('./firebaseAdmin');
 const logger = require('../config/logger');
 const prisma = require('../db/db');
 
-// Expo push tokens (React Native): { token, email, platform }
-const expoTokens = new Map();
 
 /**
  * Add an admin push subscription (FCM token).
@@ -26,13 +24,13 @@ async function addSubscription(subscription, adminEmail) {
     await prisma.pushSubscription.upsert({
       where: { endpoint: token },
       update: {
-        keys: {}, // empty json to satisfy schema
+        keys: { platform: 'web', type: 'fcm' },
         adminEmail: adminEmail || null,
         createdAt: new Date()
       },
       create: {
         endpoint: token,
-        keys: {},
+        keys: { platform: 'web', type: 'fcm' },
         adminEmail: adminEmail || null
       }
     });
@@ -66,17 +64,33 @@ async function removeSubscription(token) {
 /**
  * Add Expo push token (React Native).
  */
-function addExpoToken(token, email, platform) {
+async function addExpoToken(token, email, platform) {
   if (!token) return;
-  expoTokens.set(token, { email: email || '', platform: platform || 'android', addedAt: Date.now() });
-  logger.info('Push: Expo token added', { total: expoTokens.size, email });
+  try {
+    await prisma.pushSubscription.upsert({
+      where: { endpoint: token },
+      update: {
+        keys: { platform: platform || 'android', type: 'expo' },
+        adminEmail: email || null,
+        createdAt: new Date()
+      },
+      create: {
+        endpoint: token,
+        keys: { platform: platform || 'android', type: 'expo' },
+        adminEmail: email || null
+      }
+    });
+    logger.info('Push: Expo token saved to DB', { tokenPreview: token.slice(0, 30), email });
+  } catch (err) {
+    logger.error('Push: failed to save Expo token to DB', { error: err.message });
+  }
 }
 
 /**
  * Send push via Expo Push API.
  */
 async function sendExpoPush(tokens, title, body, data) {
-  if (!tokens.length) return;
+  if (!tokens || !tokens.length) return;
   const messages = tokens.map((t) => ({
     to: t,
     sound: 'default',
@@ -94,7 +108,7 @@ async function sendExpoPush(tokens, title, body, data) {
     if (result.data) {
       result.data.forEach((r, i) => {
         if (r.status === 'error' && r.details?.error === 'DeviceNotRegistered') {
-          expoTokens.delete(tokens[i]);
+          removeSubscription(tokens[i]);
         }
       });
     }
@@ -104,7 +118,7 @@ async function sendExpoPush(tokens, title, body, data) {
 }
 
 /**
- * Send push notification to all admin subscribers via FCM.
+ * Send push notification to all admin subscribers.
  */
 async function notifyAdmin(title, body, url) {
   logger.info('Push: notifyAdmin called', { title, body: (body || '').slice(0, 80), url });
@@ -117,37 +131,44 @@ async function notifyAdmin(title, body, url) {
     return;
   }
 
-  if (subs.length > 0) {
-    const tokens = subs.map(sub => sub.endpoint).filter(Boolean);
-    if (tokens.length > 0) {
-      const message = {
-        // notification field is required for Chrome to reliably deliver web push messages.
-        // Without it, Chrome silently drops data-only FCM messages to browser tokens.
-        // Our SW's onBackgroundMessage handler overrides the display with the custom icon/URL from data.
-        notification: {
-          title: title || 'BillboardHub Admin',
-          body: body || ''
-        },
-        data: {
-          // data fields are read by our service worker to show the proper notification
-          title: title || 'BillboardHub Admin',
-          body: body || '',
-          url: url || '/#/admin',
-          tag: 'adscape-push'
-        },
-        android: { priority: 'high' },
-        webpush: { headers: { Urgency: 'high' } },
-        tokens: tokens
-      };
+  const fcmTokens = [];
+  const expoTokensList = [];
 
-      try {
+  subs.forEach(sub => {
+    const token = sub.endpoint;
+    if (!token) return;
+    if (token.startsWith('ExponentPushToken') || token.startsWith('ExpoPushToken')) {
+      expoTokensList.push(token);
+    } else {
+      fcmTokens.push(token);
+    }
+  });
+
+  if (fcmTokens.length > 0) {
+    const message = {
+      notification: {
+        title: String(title || 'BillboardHub Admin'),
+        body: String(body || '')
+      },
+      data: {
+        title: String(title || 'BillboardHub Admin'),
+        body: String(body || ''),
+        url: String(url || '/#/admin'),
+        tag: 'adscape-push'
+      },
+      android: { priority: 'high' },
+      webpush: { headers: { Urgency: 'high' } },
+      tokens: fcmTokens
+    };
+
+    try {
+      if (admin && admin.messaging) {
         const response = await admin.messaging().sendEachForMulticast(message);
         logger.info('Push: FCM Multicast sent', {
           successCount: response.successCount,
           failureCount: response.failureCount
         });
 
-        // Cleanup stale tokens and log details
         if (response.failureCount > 0) {
           const failedTokens = [];
           response.responses.forEach((resp, idx) => {
@@ -159,16 +180,16 @@ async function notifyAdmin(title, body, url) {
                 index: idx,
                 errorCode,
                 errorMessage,
-                tokenPreview: tokens[idx].slice(0, 30)
+                tokenPreview: fcmTokens[idx].slice(0, 30)
               });
 
-              // Remove tokens that are no longer valid
               if (
                 errorCode === 'messaging/invalid-registration-token' ||
                 errorCode === 'messaging/registration-token-not-registered' ||
-                errorCode === 'messaging/invalid-argument'
+                errorCode === 'messaging/invalid-argument' ||
+                errorCode === 'messaging/mismatched-credential'
               ) {
-                failedTokens.push(tokens[idx]);
+                failedTokens.push(fcmTokens[idx]);
               }
             }
           });
@@ -177,19 +198,20 @@ async function notifyAdmin(title, body, url) {
             await removeSubscription(staleToken);
           }
         }
-      } catch (err) {
-        logger.error('Push: FCM Multicast failed', { error: err.message });
+      } else {
+        logger.warn('Push: Firebase Admin SDK not properly initialized.');
       }
+    } catch (err) {
+      logger.error('Push: FCM Multicast failed', { error: err.message });
     }
   } else {
     logger.info('Push: no admin FCM subscriptions to notify');
   }
 
-  // Also send to Expo (React Native) tokens
-  const expoTokenList = Array.from(expoTokens.keys());
-  if (expoTokenList.length > 0) {
-    await sendExpoPush(expoTokenList, title, body, { url: url || '' });
-    logger.info('Push: sent to Expo devices', { count: expoTokenList.length });
+  // Handle Expo tokens
+  if (expoTokensList.length > 0) {
+    await sendExpoPush(expoTokensList, title, body, { url: url || '' });
+    logger.info('Push: sent to Expo devices', { count: expoTokensList.length });
   }
 }
 

@@ -10,13 +10,13 @@ const logger = require('../config/logger');
 // POST /signage/devices/register
 exports.registerDevice = async (req, res) => {
   try {
-    const { deviceId, model, manufacturer, osVersion, screenResolution, appVersion } = req.body;
+    const { deviceId, model, manufacturer, osVersion, screenResolution, appVersion, connectionCode } = req.body;
 
     if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
 
-    // Generate a unique 10-digit pairing code if not already paired
-    // For simplicity, we use a random numeric string
-    const connectionCode = Math.floor(1000000000 + Math.random() * 9000000000).toString();
+    // Keep the pairing code stable across app redeploys if the client already has one.
+    const stableConnectionCode = String(connectionCode || '').trim()
+      || Math.floor(1000000000 + Math.random() * 9000000000).toString();
 
     const device = await prisma.adscapePlayer.upsert({
       where: { screenId: deviceId },
@@ -49,7 +49,7 @@ exports.registerDevice = async (req, res) => {
 
     res.json({
       success: true,
-      connectionCode, // Machine shows this to user for pairing
+      connectionCode: stableConnectionCode, // Machine shows this to user for pairing
       deviceId: device.screenId
     });
   } catch (error) {
@@ -84,48 +84,321 @@ exports.checkPairingStatus = async (req, res) => {
   }
 };
 
+// DELETE /signage/devices/:deviceId
+exports.deregisterDevice = async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+
+    if (!deviceId) {
+      return res.status(400).json({ error: 'deviceId is required' });
+    }
+
+    const normalizedDeviceId = String(deviceId).trim();
+
+    const disconnectedBillboards = await prisma.billboard.updateMany({
+      where: { screen_id: normalizedDeviceId },
+      data: { screen_id: null }
+    });
+
+    await prisma.adscapePlayer.deleteMany({
+      where: { screenId: normalizedDeviceId }
+    });
+
+    try {
+      await prisma.playerScreen.deleteMany({
+        where: {
+          OR: [
+            { machineId: normalizedDeviceId },
+            { screenId: normalizedDeviceId }
+          ]
+        }
+      });
+    } catch (legacyError) {
+      logger.warn?.('Legacy player screen cleanup skipped:', legacyError);
+    }
+
+    logger.info('[SIGNAGE] Device deregistered', {
+      deviceId: normalizedDeviceId,
+      disconnectedBillboards: disconnectedBillboards.count
+    });
+
+    res.json({
+      success: true,
+      deviceId: normalizedDeviceId,
+      disconnectedBillboards: disconnectedBillboards.count
+    });
+  } catch (error) {
+    logger.error('Deregister Device Error:', error);
+    res.status(500).json({ error: 'Device deregistration failed' });
+  }
+};
+
 // 3. Get Assets for Screen
 // GET /signage/screens/:screenId/assets?date=YYYY-MM-DD
 exports.getAssets = async (req, res) => {
   try {
     const { screenId } = req.params;
     const dateStr = req.query.date || new Date().toISOString().split('T')[0];
+    const scheduleDate = new Date(`${dateStr}T00:00:00.000Z`);
+    const dayStart = new Date(`${dateStr}T00:00:00.000Z`);
+    const dayEnd = new Date(`${dateStr}T23:59:59.999Z`);
 
-    // Find the schedule for this screen on this date
-    const schedule = await prisma.dailySchedule.findUnique({
-      where: {
-        screenId_scheduleDate: {
-          screenId: screenId,
-          scheduleDate: new Date(dateStr)
+    // Resolve the billboard first to handle ID mapping (internal ID vs hardware screen_id)
+    const billboard = await prisma.billboard.findFirst({
+        where: {
+            OR: [
+                { id: String(screenId) },
+                { screen_id: String(screenId) }
+            ]
         }
+    });
+
+    if (!billboard) {
+        return res.status(404).json({ error: 'Billboard not found' });
+    }
+
+    // Try finding schedule with billboard ID first, then screen_id
+    let schedule = await prisma.dailySchedule.findFirst({
+      where: {
+        OR: [
+            { screenId: String(billboard.id) },
+            { screenId: String(billboard.screen_id) }
+        ],
+        scheduleDate: scheduleDate
       },
       include: { slots: true }
     });
 
     if (!schedule || !schedule.slots.length) {
-      // Fallback: return default branding assets if no specific schedule exists
-      const defaultAssets = await prisma.defaultAsset.findMany({ where: { isActive: true } });
-      return res.json(defaultAssets.map(a => ({
-        id: `default-${a.id}`,
-        url: a.assetUrl,
-        type: a.assetType || 'image',
-        duration: a.duration || 10,
-        checksum: null
-      })));
+        const generatedSlots = await prisma.generatedSlot.findMany({
+            where: {
+                OR: [
+                    { billboardId: String(billboard.id) },
+                    { billboardId: String(billboard.screen_id || '') },
+                    { screenId: String(billboard.id) },
+                    { screenId: String(billboard.screen_id || '') }
+                ],
+                startDate: { lte: dayEnd },
+                endDate: { gte: dayStart }
+            },
+            orderBy: [
+                { startDate: 'asc' },
+                { slotNumber: 'asc' }
+            ]
+        });
+
+        if (generatedSlots.length > 0) {
+            logger.info(
+              `[SIGNAGE] Using generated_slots fallback for screen ${screenId} on ${dateStr}. Found ${generatedSlots.length} slot(s).`
+            );
+
+            return res.json(generatedSlots.map((slot, index) => {
+                const mediaType = slot.assetUrl.toLowerCase().endsWith('.mp4') ? 'video' : 'image';
+                const slotNumber = slot.slotNumber || (index + 1);
+
+                return {
+                    id: slot.id,
+                    _id: slot.id,
+                    url: slot.assetUrl,
+                    asset_url: slot.assetUrl,
+                    type: mediaType,
+                    media_type: mediaType,
+                    duration: slot.duration || 15,
+                    campaignId: slot.campaignId,
+                    campaign_id: slot.campaignId,
+                    slotNumber,
+                    slot_number: slotNumber
+                };
+            }));
+        }
+
+        // Fallback or generate on-the-fly if we have a billboard but no schedule
+        // This handles the "scheduled but no assets fetched" issue
+        const campaignSearchStart = new Date(dayStart);
+        const campaignSearchEnd = new Date(dayEnd);
+
+        const activeCampaigns = await prisma.campaign.findMany({
+            where: {
+                status: { in: ['ACTIVE', 'LIVE', 'SCHEDULED'] },
+                startDate: { lte: campaignSearchEnd },
+                endDate: { gte: campaignSearchStart }
+            }
+        });
+
+        // Search for campaigns that include THIS billboard
+        const billboardIds = [String(billboard.id), String(billboard.screen_id)];
+        const matchedCampaigns = activeCampaigns.filter(c => {
+            if (!c.billboards) return false;
+            const bbs = typeof c.billboards === 'string' ? JSON.parse(c.billboards) : c.billboards;
+            return bbs.some(b => billboardIds.includes(String(b.id || b.billboardId || "")));
+        });
+
+        if (matchedCampaigns.length > 0) {
+            // Found active campaigns! Let's generate a temporary response or a real schedule
+            const assets = [];
+            let rrIndex = 0;
+            const defaultUrl = 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+
+            for (let i = 1; i <= 8; i++) {
+                const campaign = matchedCampaigns[rrIndex];
+                rrIndex = (rrIndex + 1) % matchedCampaigns.length;
+                
+                const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
+                const bb = bbs.find(b => billboardIds.includes(String(b.id || b.billboardId || "")));
+                const assetUrl = (bb?.files?.[0]) || (bb?.creative) || (bb?.images?.[0]) || (billboard.images?.[0]) || defaultUrl;
+
+                assets.push({
+                    id: `${campaign.id}-${i}`,
+                    url: assetUrl,
+                    type: assetUrl.toLowerCase().endsWith('.mp4') ? 'video' : 'image',
+                    duration: 15,
+                    campaignId: campaign.id
+                });
+            }
+            return res.json(assets);
+        }
+
+        // Truly no campaigns found, return defaults
+        const defaultAssets = await prisma.defaultAsset.findMany({ where: { isActive: true } });
+        if (defaultAssets.length > 0) {
+            return res.json(defaultAssets.map((a, index) => ({
+                id: `default-${a.id}`,
+                _id: `default-${a.id}`,
+                url: a.assetUrl,
+                asset_url: a.assetUrl,
+                type: a.assetType || 'image',
+                media_type: a.assetType || 'image',
+                duration: a.duration || 10,
+                campaignId: null,
+                campaign_id: null,
+                slotNumber: index + 1,
+                slot_number: index + 1
+            })));
+        } else {
+            // Very last resort
+            return res.json([{
+                id: 'fallback-logo',
+                _id: 'fallback-logo',
+                url: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png',
+                asset_url: 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png',
+                type: 'image',
+                media_type: 'image',
+                duration: 10,
+                campaignId: null,
+                campaign_id: null,
+                slotNumber: 1,
+                slot_number: 1
+            }]);
+        }
     }
 
-    const assets = schedule.slots.map(slot => ({
-      id: slot.id,
-      url: slot.assetUrl,
-      type: slot.assetUrl.toLowerCase().endsWith('.mp4') ? 'video' : 'image',
-      duration: slot.durationSec,
-      campaignId: slot.campaignId
-    }));
+    const assets = schedule.slots.map((slot) => {
+      const mediaType = slot.assetUrl.toLowerCase().endsWith('.mp4') ? 'video' : 'image';
+
+      return {
+        id: slot.id,
+        _id: slot.id,
+        url: slot.assetUrl,
+        asset_url: slot.assetUrl,
+        type: mediaType,
+        media_type: mediaType,
+        duration: slot.durationSec,
+        campaignId: slot.campaignId,
+        campaign_id: slot.campaignId,
+        slotNumber: slot.slotNumber,
+        slot_number: slot.slotNumber
+      };
+    });
 
     res.json(assets);
   } catch (error) {
     logger.error('Fetch Assets Error:', error);
     res.status(500).json({ error: 'Failed to fetch assets' });
+  }
+};
+
+// 3b. Get Billboard Details for a Screen
+// GET /signage/screens/:screenId/details
+exports.getScreenDetails = async (req, res) => {
+  try {
+    const { screenId } = req.params;
+
+    const billboard = await prisma.billboard.findFirst({
+      where: {
+        OR: [
+          { id: String(screenId) },
+          { screen_id: String(screenId) }
+        ]
+      }
+    });
+
+    if (!billboard) {
+      return res.status(404).json({ error: 'Billboard not found for screen' });
+    }
+
+    res.json({
+      id: billboard.id,
+      name: billboard.name,
+      location: billboard.location,
+      city: billboard.city,
+      state: billboard.state,
+      type: billboard.type,
+      orientation: billboard.orientation,
+      resolution: billboard.resolution,
+      status: billboard.status,
+      screenId: billboard.screen_id
+    });
+  } catch (error) {
+    logger.error('Fetch Screen Details Error:', error);
+    res.status(500).json({ error: 'Failed to fetch billboard details' });
+  }
+};
+
+// 3c. Update Billboard Orientation from Player Configuration
+// PUT /signage/screens/:screenId/orientation
+exports.updateScreenOrientation = async (req, res) => {
+  try {
+    const { screenId } = req.params;
+    const orientation = String(req.body?.orientation || '').trim().toLowerCase();
+    const allowed = ['landscape', 'portrait', 'reverse_landscape', 'reverse_portrait'];
+
+    if (!allowed.includes(orientation)) {
+      return res.status(400).json({ error: 'Invalid orientation value' });
+    }
+
+    const billboard = await prisma.billboard.findFirst({
+      where: {
+        OR: [
+          { id: String(screenId) },
+          { screen_id: String(screenId) }
+        ]
+      }
+    });
+
+    if (!billboard) {
+      return res.status(404).json({ error: 'Billboard not found for screen' });
+    }
+
+    const updated = await prisma.billboard.update({
+      where: { id: billboard.id },
+      data: { orientation }
+    });
+
+    res.json({
+      id: updated.id,
+      name: updated.name,
+      location: updated.location,
+      city: updated.city,
+      state: updated.state,
+      type: updated.type,
+      orientation: updated.orientation,
+      resolution: updated.resolution,
+      status: updated.status,
+      screenId: updated.screen_id
+    });
+  } catch (error) {
+    logger.error('Update Screen Orientation Error:', error);
+    res.status(500).json({ error: 'Failed to update screen orientation' });
   }
 };
 
@@ -137,33 +410,45 @@ exports.uploadAnalytics = async (req, res) => {
 
     if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
 
-    // Log App Usage Sessions
-    if (appUsage && Array.isArray(appUsage)) {
-      for (const session of appUsage) {
-        await prisma.screenUsage.create({
-          data: {
-            screenId: deviceId,
-            sessionStart: new Date(session.sessionStart),
-            sessionEnd: session.sessionEnd ? new Date(session.sessionEnd) : null,
-            durationSec: parseInt(session.durationSec) || 0
-          }
-        });
+    try {
+      // Log App Usage Sessions
+      if (appUsage && Array.isArray(appUsage)) {
+        for (const session of appUsage) {
+          await prisma.screenUsage.create({
+            data: {
+              screenId: deviceId,
+              sessionStart: new Date(session.sessionStart),
+              sessionEnd: session.sessionEnd ? new Date(session.sessionEnd) : null,
+              durationSec: parseInt(session.durationSec) || 0
+            }
+          });
+        }
       }
-    }
 
-    // Log Playback Stats (Impressions)
-    if (playbackStats && Array.isArray(playbackStats)) {
-      for (const stat of playbackStats) {
-        await prisma.playbackStat.create({
-          data: {
-            screenId: deviceId,
-            assetId: stat.assetId,
-            playCount: stat.playCount,
-            totalDuration: stat.totalDurationSec,
-            lastPlayedAt: new Date(stat.lastPlayedAt)
-          }
-        });
+      // Log Playback Stats (Impressions)
+      if (playbackStats && Array.isArray(playbackStats)) {
+        for (const stat of playbackStats) {
+          await prisma.playbackStat.create({
+            data: {
+              screenId: deviceId,
+              assetId: stat.assetId,
+              playCount: stat.playCount,
+              totalDuration: stat.totalDurationSec,
+              lastPlayedAt: new Date(stat.lastPlayedAt)
+            }
+          });
+        }
       }
+    } catch (analyticsError) {
+      if (analyticsError?.code === 'P2021') {
+        logger.warn('[SIGNAGE] Analytics tables missing, skipping analytics upload', {
+          deviceId,
+          code: analyticsError.code,
+          table: analyticsError.meta?.table
+        });
+        return res.json({ success: true, skipped: 'analytics_tables_missing' });
+      }
+      throw analyticsError;
     }
 
     res.json({ success: true, message: 'Analytics synced successfully' });

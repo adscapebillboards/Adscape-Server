@@ -42,7 +42,7 @@ router.post('/push/subscribe', auth, async (req, res) => {
 });
 
 // Admin only: save Expo push token (React Native app)
-router.post('/push/subscribe-expo', auth, roleAuth(['superadmin']), (req, res) => {
+router.post('/push/subscribe-expo', auth, roleAuth(['superadmin']), async (req, res) => {
   try {
     const { token, platform } = req.body;
     const user = req.user;
@@ -50,7 +50,7 @@ router.post('/push/subscribe-expo', auth, roleAuth(['superadmin']), (req, res) =
     if (!token || typeof token !== 'string') {
       return res.status(400).json({ error: 'Invalid subscription: token required' });
     }
-    pushService.addExpoToken(token, user?.email, platform);
+    await pushService.addExpoToken(token, user?.email, platform);
     res.json({ success: true, message: 'Expo token saved' });
   } catch (err) {
     logger.error('Push: Error saving Expo token', { error: err.message, userEmail: req.user?.email });

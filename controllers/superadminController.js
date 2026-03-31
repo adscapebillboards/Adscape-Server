@@ -2,13 +2,14 @@ const prisma = require('../db/db');
 const logger = require('../config/logger');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { getDeveloperMode, setDeveloperMode } = require('../utils/developerMode');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
 // Get all superadmins (only accessible by superadmin role)
 exports.getAllSuperAdmins = async (req, res) => {
   try {
-    const superadmins = await prisma.superAdmin.findMany({
+    const superadmins = await prisma.publisher.findMany({
       select: {
         id: true,
         email: true,
@@ -38,7 +39,7 @@ exports.getSuperAdminProfile = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const superadmin = await prisma.superAdmin.findUnique({
+    const superadmin = await prisma.publisher.findUnique({
       where: { id: parseInt(id) },
       select: {
         id: true,
@@ -81,7 +82,7 @@ exports.createSuperAdmin = async (req, res) => {
 
   try {
     // Check if email already exists
-    const existingUser = await prisma.superAdmin.findUnique({
+    const existingUser = await prisma.publisher.findUnique({
       where: { email }
     });
 
@@ -93,7 +94,7 @@ exports.createSuperAdmin = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create superadmin
-    const superadmin = await prisma.superAdmin.create({
+    const superadmin = await prisma.publisher.create({
       data: {
         email,
         password: hashedPassword,
@@ -133,7 +134,7 @@ exports.updateSuperAdmin = async (req, res) => {
 
   try {
     // Check if superadmin exists
-    const existingSuperadmin = await prisma.superAdmin.findUnique({
+    const existingSuperadmin = await prisma.publisher.findUnique({
       where: { id: parseInt(id) }
     });
 
@@ -147,7 +148,7 @@ exports.updateSuperAdmin = async (req, res) => {
     }
 
     // Update superadmin
-    const updatedSuperadmin = await prisma.superAdmin.update({
+    const updatedSuperadmin = await prisma.publisher.update({
       where: { id: parseInt(id) },
       data: {
         fullName,
@@ -191,7 +192,7 @@ exports.updateSuperAdminPassword = async (req, res) => {
 
   try {
     // Get superadmin with password
-    const superadmin = await prisma.superAdmin.findUnique({
+    const superadmin = await prisma.publisher.findUnique({
       where: { id: parseInt(id) }
     });
 
@@ -209,7 +210,7 @@ exports.updateSuperAdminPassword = async (req, res) => {
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
     // Update password
-    await prisma.superAdmin.update({
+    await prisma.publisher.update({
       where: { id: parseInt(id) },
       data: {
         password: hashedNewPassword,
@@ -231,7 +232,7 @@ exports.deleteSuperAdmin = async (req, res) => {
 
   try {
     // Check if superadmin exists
-    const superadmin = await prisma.superAdmin.findUnique({
+    const superadmin = await prisma.publisher.findUnique({
       where: { id: parseInt(id) }
     });
 
@@ -245,7 +246,7 @@ exports.deleteSuperAdmin = async (req, res) => {
     }
 
     // Soft delete by setting status to inactive
-    await prisma.superAdmin.update({
+    await prisma.publisher.update({
       where: { id: parseInt(id) },
       data: {
         status: 'inactive',
@@ -266,7 +267,7 @@ exports.reactivateSuperAdmin = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const superadmin = await prisma.superAdmin.findUnique({
+    const superadmin = await prisma.publisher.findUnique({
       where: { id: parseInt(id) }
     });
 
@@ -274,7 +275,7 @@ exports.reactivateSuperAdmin = async (req, res) => {
       return res.status(404).json({ error: 'Superadmin not found' });
     }
 
-    await prisma.superAdmin.update({
+    await prisma.publisher.update({
       where: { id: parseInt(id) },
       data: {
         status: 'active',
@@ -299,7 +300,7 @@ exports.getCurrentUserProfile = async (req, res) => {
   }
 
   try {
-    const superadmin = await prisma.superAdmin.findUnique({
+    const superadmin = await prisma.publisher.findUnique({
       where: { id: parseInt(userId) },
       select: {
         id: true,
@@ -335,7 +336,7 @@ exports.updateCurrentUserProfile = async (req, res) => {
   }
 
   try {
-    const updatedProfile = await prisma.superAdmin.update({
+    const updatedProfile = await prisma.publisher.update({
       where: { id: parseInt(userId) },
       data: {
         fullName,
@@ -362,6 +363,36 @@ exports.updateCurrentUserProfile = async (req, res) => {
   } catch (error) {
     logger.error('Error updating user profile:', error);
     res.status(500).json({ error: 'Failed to update profile' });
+  }
+};
+
+exports.getDeveloperMode = async (req, res) => {
+  try {
+    const enabled = await getDeveloperMode();
+    res.json({ developerMode: enabled });
+  } catch (error) {
+    logger.error('Error fetching developer mode:', error);
+    res.status(500).json({ error: 'Failed to fetch developer mode' });
+  }
+};
+
+exports.updateDeveloperMode = async (req, res) => {
+  try {
+    const enabled = Boolean(req.body?.developerMode);
+    await setDeveloperMode(enabled);
+
+    logger.user('Developer mode updated', {
+      actorId: req.user?.id,
+      developerMode: enabled
+    });
+
+    res.json({
+      message: 'Developer mode updated successfully',
+      developerMode: enabled
+    });
+  } catch (error) {
+    logger.error('Error updating developer mode:', error);
+    res.status(500).json({ error: 'Failed to update developer mode' });
   }
 };
 

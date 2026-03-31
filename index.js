@@ -9,7 +9,6 @@ const pushRoutes = require('./routes/push');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const { getPlaylistForScreen } = require('./utils/socketHelpers');
-const signageRoutes = require('./signage/signageRoutes');
 
 // Socket.IO setup
 const { Server } = require("socket.io");
@@ -37,12 +36,6 @@ const io = new Server(server, {
     allowEIO3: true
 });
 
-// JSON parsing
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Signage APIs (v3)
-app.use('/api/signage', signageRoutes);
 
 // Push Notifications APIs
 app.use('/api', pushRoutes);

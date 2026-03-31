@@ -60,6 +60,7 @@ model Publisher {
   state           String?
   website         String?
   googleId        String?          @map("google_id") @db.VarChar(255)
+  permissions     Json?            @map("permissions")
   metric          PublisherMetric?
 
   @@map("publishers")
@@ -123,6 +124,7 @@ model Campaign {
   startDate    DateTime? @map("start_date") @db.Date
   endDate      DateTime? @map("end_date") @db.Date
   billboards   Json?
+  assets       Json?
   createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime? @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   owner        String?
