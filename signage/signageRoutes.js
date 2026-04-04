@@ -5,6 +5,8 @@ const signageController = require('./signageController');
 // Device Endpoints
 router.post('/devices/register', signageController.registerDevice);
 router.get('/devices/pairing-status/:deviceId', signageController.checkPairingStatus);
+router.get('/devices/pairing-info/:deviceId', signageController.getPairingInfo);
+router.get('/devices/pairing-qr/:deviceId', signageController.getPairingQr);
 router.delete('/devices/:deviceId', signageController.deregisterDevice);
 
 // screen/Screen Endpoints

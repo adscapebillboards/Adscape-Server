@@ -1,6 +1,14 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
 
+function buildPairingPayload(deviceId, connectionCode) {
+  return {
+    type: 'adscape-pairing',
+    screenId: String(deviceId || '').trim(),
+    connectionCode: String(connectionCode || '').trim() || undefined
+  };
+}
+
 /**
  * Controller for modern Android Signage (v3) API.
  * Handles device registration, asset delivery, and analytics.
@@ -81,6 +89,61 @@ exports.checkPairingStatus = async (req, res) => {
     }
   } catch (error) {
     res.status(500).json({ error: 'Pairing check failed' });
+  }
+};
+
+// 2b. Get Pairing Payload
+// GET /signage/devices/pairing-info/:deviceId
+exports.getPairingInfo = async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const normalizedDeviceId = String(deviceId || '').trim();
+
+    if (!normalizedDeviceId) {
+      return res.status(400).json({ error: 'deviceId is required' });
+    }
+
+    const player = await prisma.adscapePlayer.findUnique({
+      where: { screenId: normalizedDeviceId },
+      select: {
+        screenId: true
+      }
+    });
+
+    const payload = buildPairingPayload(normalizedDeviceId, req.query.connectionCode);
+
+    res.json({
+      success: true,
+      registered: !!player,
+      payload,
+      qrValue: JSON.stringify(payload)
+    });
+  } catch (error) {
+    logger.error('Get Pairing Info Error:', error);
+    res.status(500).json({ error: 'Failed to fetch pairing info' });
+  }
+};
+
+// 2c. Pairing QR redirect
+// GET /signage/devices/pairing-qr/:deviceId?connectionCode=1234567890&size=640
+exports.getPairingQr = async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const normalizedDeviceId = String(deviceId || '').trim();
+
+    if (!normalizedDeviceId) {
+      return res.status(400).json({ error: 'deviceId is required' });
+    }
+
+    const size = Math.max(128, Math.min(parseInt(req.query.size, 10) || 640, 2048));
+    const payload = buildPairingPayload(normalizedDeviceId, req.query.connectionCode);
+    const qrValue = JSON.stringify(payload);
+    const redirectUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=1&data=${encodeURIComponent(qrValue)}`;
+
+    res.redirect(302, redirectUrl);
+  } catch (error) {
+    logger.error('Get Pairing QR Error:', error);
+    res.status(500).json({ error: 'Failed to generate pairing QR' });
   }
 };
 

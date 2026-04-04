@@ -59,12 +59,22 @@ router.patch('/:id/connect', async (req, res) => {
   }
 
   try {
-    const billboard = await prisma.billboard.update({
-      where: { id },
-      data: { screen_id: screen_id.trim() }
+    const normalizedScreenId = screen_id.trim();
+
+    await prisma.billboard.updateMany({
+      where: {
+        screen_id: normalizedScreenId,
+        NOT: { id }
+      },
+      data: { screen_id: null }
     });
 
-    logger.billboard('Screen connected', `Billboard ID: ${id}, Screen ID: ${screen_id}`);
+    const billboard = await prisma.billboard.update({
+      where: { id },
+      data: { screen_id: normalizedScreenId }
+    });
+
+    logger.billboard('Screen connected', `Billboard ID: ${id}, Screen ID: ${normalizedScreenId}`);
     res.json({ message: 'Billboard connected successfully', billboard });
   } catch (err) {
     if (err.code === 'P2025') {
