@@ -1,6 +1,26 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
 
+const DEFAULT_LOGO = "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1776145745/juu3ojtpwcvhckyffskv.png";
+
+function appendDefaultSlot(assets) {
+    const list = [...assets];
+    list.push({
+        id: "default-9",
+        _id: "default-9",
+        url: DEFAULT_LOGO,
+        asset_url: DEFAULT_LOGO,
+        type: "image",
+        media_type: "image",
+        duration: 15,
+        campaignId: "default",
+        campaign_id: "default",
+        slotNumber: 9,
+        slot_number: 9
+    });
+    return list;
+}
+
 function buildPairingPayload(deviceId, connectionCode) {
   return {
     type: 'adscape-pairing',
@@ -74,16 +94,34 @@ exports.checkPairingStatus = async (req, res) => {
   try {
     const { deviceId } = req.params;
 
-    // A device is "paired" if it has been assigned to a Billboard in our system.
-    // In this schema, Billboards have a screen_id field.
-    const billboard = await prisma.billboard.findFirst({
-      where: { screen_id: deviceId }
+    // 1. Try matching billboard by screen_id directly (UUID or Connection Code)
+    let billboard = await prisma.billboard.findFirst({
+      where: {
+        OR: [
+          { screen_id: deviceId },
+          { id: deviceId }
+        ]
+      }
     });
+
+    // 2. If no direct match, look up the device's connection code and try matching that
+    if (!billboard) {
+      const player = await prisma.adscapePlayer.findUnique({
+        where: { screenId: deviceId }
+      });
+
+      if (player && player.connectionCode) {
+        billboard = await prisma.billboard.findFirst({
+          where: { screen_id: player.connectionCode }
+        });
+      }
+    }
 
     if (billboard) {
       res.json({
         isPaired: true,
-        screenId: billboard.id, // The billboard ID becomes the logical screenId
+        screenId: billboard.id,
+        screen_id: billboard.screen_id,
         location: billboard.location
       });
     } else {
@@ -204,9 +242,15 @@ exports.getAssets = async (req, res) => {
   try {
     const { screenId } = req.params;
     const dateStr = req.query.date || new Date().toISOString().split('T')[0];
+    
+    // DEBUG LOG
+    try {
+        require('fs').appendFileSync('signage_requests.log', `${new Date().toISOString()} - screenId: ${screenId}, date: ${dateStr}\n`);
+    } catch(e) {}
     const scheduleDate = new Date(`${dateStr}T00:00:00.000Z`);
     const dayStart = new Date(`${dateStr}T00:00:00.000Z`);
-    const dayEnd = new Date(`${dateStr}T23:59:59.999Z`);
+    // Extend range to 3 days to show upcoming slots in the timeline preview
+    const dayEnd = new Date(dayStart.getTime() + (3 * 24 * 60 * 60 * 1000) - 1);
 
     // Resolve the billboard first to handle ID mapping (internal ID vs hardware screen_id)
     const billboard = await prisma.billboard.findFirst({
@@ -241,11 +285,7 @@ exports.getAssets = async (req, res) => {
     });
 
     if (generatedSlots.length > 0) {
-        logger.info(
-            `[SIGNAGE] Using generated_slots for screen ${screenId} on ${dateStr}. Found ${generatedSlots.length} slot(s).`
-        );
-
-        return res.json(generatedSlots.map((slot, index) => {
+        let slots = generatedSlots.map((slot, index) => {
             const mediaType = slot.assetUrl.toLowerCase().endsWith('.mp4') ? 'video' : 'image';
             const slotNumber = slot.slotNumber || (index + 1);
 
@@ -259,10 +299,14 @@ exports.getAssets = async (req, res) => {
                 duration: slot.duration || 15,
                 campaignId: slot.campaignId,
                 campaign_id: slot.campaignId,
+                startDate: slot.startDate,
+                start_date: slot.startDate,
                 slotNumber,
                 slot_number: slotNumber
             };
-        }));
+        });
+
+        return res.json(appendDefaultSlot(slots));
     }
 
     // 2. Fallback to legacy DailySchedule
@@ -324,7 +368,7 @@ exports.getAssets = async (req, res) => {
                     campaignId: campaign.id
                 });
             }
-            return res.json(assets);
+            return res.json(appendDefaultSlot(assets));
         }
 
         // Truly no campaigns found, return defaults
@@ -379,7 +423,7 @@ exports.getAssets = async (req, res) => {
       };
     });
 
-    res.json(assets);
+    res.json(appendDefaultSlot(assets));
   } catch (error) {
     logger.error('Fetch Assets Error:', error);
     res.status(500).json({ error: 'Failed to fetch assets' });
