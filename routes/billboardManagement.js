@@ -59,11 +59,19 @@ router.patch('/:id/connect', async (req, res) => {
   }
 
   try {
-    const normalizedScreenId = screen_id.trim();
+    const normalizedCode = screen_id.trim();
+
+    // Check if the user entered a pairing code instead of a direct screenId
+    const player = await prisma.adscapePlayer.findFirst({
+        where: { connectionCode: normalizedCode }
+    });
+    
+    // Resolve logical hardware screenId
+    const targetScreenId = player ? player.screenId : normalizedCode;
 
     await prisma.billboard.updateMany({
       where: {
-        screen_id: normalizedScreenId,
+        screen_id: targetScreenId,
         NOT: { id }
       },
       data: { screen_id: null }
@@ -71,10 +79,10 @@ router.patch('/:id/connect', async (req, res) => {
 
     const billboard = await prisma.billboard.update({
       where: { id },
-      data: { screen_id: normalizedScreenId }
+      data: { screen_id: targetScreenId }
     });
 
-    logger.billboard('Screen connected', `Billboard ID: ${id}, Screen ID: ${normalizedScreenId}`);
+    logger.billboard('Screen connected', `Billboard ID: ${id}, Screen ID: ${targetScreenId}`);
     res.json({ message: 'Billboard connected successfully', billboard });
   } catch (err) {
     if (err.code === 'P2025') {
@@ -106,4 +114,4 @@ router.patch('/:id/disconnect', async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;

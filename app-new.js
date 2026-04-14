@@ -48,6 +48,7 @@ const playerV1Routes = require('./routes/playerV1Routes');
 const availabilityRoutes = require('./routes/availability');
 const adscapeRoutes = require('./routes/adscapeRoutes');
 const signageRoutes = require('./signage/signageRoutes');
+const updateRoutes = require('./routes/update');
 const prisma = require('./db/db');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
@@ -376,6 +377,7 @@ app.use('/api/bmi', bmiRoutes);
 // Adscape routes
 app.use('/api', adscapeRoutes);
 app.use('/api/signage', signageRoutes);
+app.use('/api', updateRoutes);
 
 // Serve static files from public directory
 app.use(express.static(path.join(__dirname, 'public')));

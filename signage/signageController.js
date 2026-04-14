@@ -33,11 +33,13 @@ exports.registerDevice = async (req, res) => {
         osVersion: osVersion,
         appVersion: "F3", // We've refactored to F3
         appVersionCode: appVersion,
+        connectionCode: stableConnectionCode,
         updatedAt: new Date(),
         lastSeen: new Date()
       },
       create: {
         screenId: deviceId,
+        connectionCode: stableConnectionCode,
         deviceName: `${manufacturer} ${model}`,
         osVersion: osVersion,
         appVersion: "F3",
@@ -220,7 +222,50 @@ exports.getAssets = async (req, res) => {
         return res.status(404).json({ error: 'Billboard not found' });
     }
 
-    // Try finding schedule with billboard ID first, then screen_id
+    // 1. Prioritize modern GeneratedSlots
+    const generatedSlots = await prisma.generatedSlot.findMany({
+        where: {
+            OR: [
+                { billboardId: String(billboard.id) },
+                { billboardId: String(billboard.screen_id || '') },
+                { screenId: String(billboard.id) },
+                { screenId: String(billboard.screen_id || '') }
+            ],
+            startDate: { lte: dayEnd },
+            endDate: { gte: dayStart }
+        },
+        orderBy: [
+            { startDate: 'asc' },
+            { slotNumber: 'asc' }
+        ]
+    });
+
+    if (generatedSlots.length > 0) {
+        logger.info(
+            `[SIGNAGE] Using generated_slots for screen ${screenId} on ${dateStr}. Found ${generatedSlots.length} slot(s).`
+        );
+
+        return res.json(generatedSlots.map((slot, index) => {
+            const mediaType = slot.assetUrl.toLowerCase().endsWith('.mp4') ? 'video' : 'image';
+            const slotNumber = slot.slotNumber || (index + 1);
+
+            return {
+                id: slot.id,
+                _id: slot.id,
+                url: slot.assetUrl,
+                asset_url: slot.assetUrl,
+                type: mediaType,
+                media_type: mediaType,
+                duration: slot.duration || 15,
+                campaignId: slot.campaignId,
+                campaign_id: slot.campaignId,
+                slotNumber,
+                slot_number: slotNumber
+            };
+        }));
+    }
+
+    // 2. Fallback to legacy DailySchedule
     let schedule = await prisma.dailySchedule.findFirst({
       where: {
         OR: [
@@ -233,47 +278,8 @@ exports.getAssets = async (req, res) => {
     });
 
     if (!schedule || !schedule.slots.length) {
-        const generatedSlots = await prisma.generatedSlot.findMany({
-            where: {
-                OR: [
-                    { billboardId: String(billboard.id) },
-                    { billboardId: String(billboard.screen_id || '') },
-                    { screenId: String(billboard.id) },
-                    { screenId: String(billboard.screen_id || '') }
-                ],
-                startDate: { lte: dayEnd },
-                endDate: { gte: dayStart }
-            },
-            orderBy: [
-                { startDate: 'asc' },
-                { slotNumber: 'asc' }
-            ]
-        });
 
-        if (generatedSlots.length > 0) {
-            logger.info(
-              `[SIGNAGE] Using generated_slots fallback for screen ${screenId} on ${dateStr}. Found ${generatedSlots.length} slot(s).`
-            );
-
-            return res.json(generatedSlots.map((slot, index) => {
-                const mediaType = slot.assetUrl.toLowerCase().endsWith('.mp4') ? 'video' : 'image';
-                const slotNumber = slot.slotNumber || (index + 1);
-
-                return {
-                    id: slot.id,
-                    _id: slot.id,
-                    url: slot.assetUrl,
-                    asset_url: slot.assetUrl,
-                    type: mediaType,
-                    media_type: mediaType,
-                    duration: slot.duration || 15,
-                    campaignId: slot.campaignId,
-                    campaign_id: slot.campaignId,
-                    slotNumber,
-                    slot_number: slotNumber
-                };
-            }));
-        }
+        // ... Fallback continues to activeCampaigns
 
         // Fallback or generate on-the-fly if we have a billboard but no schedule
         // This handles the "scheduled but no assets fetched" issue

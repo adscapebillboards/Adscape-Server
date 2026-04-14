@@ -1,0 +1,118 @@
+{
+  "channels": {
+    "stable": {
+      "platforms": {
+        "windows": {
+          "x86_64": {
+            "version": "1.0.1",
+            "url": "https://downloads.example.com/player/windows/DigitalSignagePlayer-1.0.1.zip",
+            "checksumSha256": "REPLACE_WITH_REAL_SHA256",
+            "packageType": "zip",
+            "mandatory": false,
+            "silent": true,
+            "releaseNotes": "Windows maintenance release with OTA support.",
+            "preservePaths": [
+              "player-data",
+              "config.json",
+              "data",
+              "user_data",
+              "logs",
+              "cache",
+              "media_cache"
+            ],
+            "binaryTargets": [
+              "DigitalSignagePlayer.exe",
+              "DigitalSignageUpdater.exe",
+              "platforms",
+              "styles",
+              "imageformats",
+              "multimedia",
+              "networkinformation",
+              "tls"
+            ]
+          },
+          "default": {
+            "version": "1.0.1",
+            "url": "https://downloads.example.com/player/windows/DigitalSignagePlayer-1.0.1.zip",
+            "checksumSha256": "REPLACE_WITH_REAL_SHA256",
+            "packageType": "zip",
+            "mandatory": false,
+            "silent": true,
+            "releaseNotes": "Windows maintenance release with OTA support.",
+            "preservePaths": [
+              "player-data",
+              "config.json",
+              "data",
+              "user_data",
+              "logs",
+              "cache",
+              "media_cache"
+            ],
+            "binaryTargets": [
+              "DigitalSignagePlayer.exe",
+              "DigitalSignageUpdater.exe",
+              "platforms",
+              "styles",
+              "imageformats",
+              "multimedia",
+              "networkinformation",
+              "tls"
+            ]
+          }
+        },
+        "linux": {
+          "x86_64": {
+            "version": "1.0.1",
+            "url": "https://downloads.example.com/player/linux/DigitalSignagePlayer-1.0.1.tar.gz",
+            "checksumSha256": "REPLACE_WITH_REAL_SHA256",
+            "packageType": "tar.gz",
+            "mandatory": false,
+            "silent": true,
+            "releaseNotes": "Linux maintenance release with OTA support.",
+            "preservePaths": [
+              "player-data",
+              "config.json",
+              "data",
+              "user_data",
+              "logs",
+              "cache",
+              "media_cache"
+            ],
+            "binaryTargets": [
+              "DigitalSignagePlayer",
+              "DigitalSignageUpdater",
+              "lib",
+              "plugins",
+              "qml"
+            ]
+          },
+          "default": {
+            "version": "1.0.1",
+            "url": "https://downloads.example.com/player/linux/DigitalSignagePlayer-1.0.1.tar.gz",
+            "checksumSha256": "REPLACE_WITH_REAL_SHA256",
+            "packageType": "tar.gz",
+            "mandatory": false,
+            "silent": true,
+            "releaseNotes": "Linux maintenance release with OTA support.",
+            "preservePaths": [
+              "player-data",
+              "config.json",
+              "data",
+              "user_data",
+              "logs",
+              "cache",
+              "media_cache"
+            ],
+            "binaryTargets": [
+              "DigitalSignagePlayer",
+              "DigitalSignageUpdater",
+              "lib",
+              "plugins",
+              "qml"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
