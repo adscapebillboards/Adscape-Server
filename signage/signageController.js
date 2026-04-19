@@ -29,6 +29,11 @@ function buildPairingPayload(deviceId, connectionCode) {
   };
 }
 
+function limitString(value, maxLength) {
+  const normalized = String(value || '').trim();
+  return normalized.length > maxLength ? normalized.slice(0, maxLength) : normalized;
+}
+
 /**
  * Controller for modern Android Signage (v3) API.
  * Handles device registration, asset delivery, and analytics.
@@ -42,28 +47,34 @@ exports.registerDevice = async (req, res) => {
 
     if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
 
+    const normalizedDeviceId = limitString(deviceId, 64);
+    const normalizedConnectionCode = limitString(connectionCode, 20);
+    const normalizedDeviceName = limitString(`${manufacturer || ''} ${model || ''}`, 255);
+    const normalizedOsVersion = limitString(osVersion, 50);
+    const normalizedAppVersionCode = limitString(appVersion, 20);
+
     // Keep the pairing code stable across app redeploys if the client already has one.
-    const stableConnectionCode = String(connectionCode || '').trim()
+    const stableConnectionCode = normalizedConnectionCode
       || Math.floor(1000000000 + Math.random() * 9000000000).toString();
 
     const device = await prisma.adscapePlayer.upsert({
-      where: { screenId: deviceId },
+      where: { screenId: normalizedDeviceId },
       update: {
-        deviceName: `${manufacturer} ${model}`,
-        osVersion: osVersion,
+        deviceName: normalizedDeviceName,
+        osVersion: normalizedOsVersion,
         appVersion: "F3", // We've refactored to F3
-        appVersionCode: appVersion,
+        appVersionCode: normalizedAppVersionCode,
         connectionCode: stableConnectionCode,
         updatedAt: new Date(),
         lastSeen: new Date()
       },
       create: {
-        screenId: deviceId,
+        screenId: normalizedDeviceId,
         connectionCode: stableConnectionCode,
-        deviceName: `${manufacturer} ${model}`,
-        osVersion: osVersion,
+        deviceName: normalizedDeviceName,
+        osVersion: normalizedOsVersion,
         appVersion: "F3",
-        appVersionCode: appVersion,
+        appVersionCode: normalizedAppVersionCode,
         isActive: true
       }
     });
@@ -71,9 +82,9 @@ exports.registerDevice = async (req, res) => {
     // Also update legacy PlayerScreen table for compatibility if needed
     try {
         await prisma.playerScreen.upsert({
-            where: { machineId: deviceId },
+            where: { machineId: normalizedDeviceId },
             update: { resolution: screenResolution, updatedAt: new Date() },
-            create: { machineId: deviceId, screenId: deviceId, resolution: screenResolution }
+            create: { machineId: normalizedDeviceId, screenId: normalizedDeviceId, resolution: screenResolution }
         });
     } catch(e) { /* ignore legacy check */ }
 
