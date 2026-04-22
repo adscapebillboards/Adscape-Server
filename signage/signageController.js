@@ -638,28 +638,145 @@ exports.syncPlaybackAnalytics = async (req, res) => {
       }
     }
 
-    // Best-effort: if the table is not migrated yet, don't break the player.
+    // Persist structured playback analytics into existing tables (best-effort).
+    // We currently support `slot_playback` rows from the offline-first Electron player.
     try {
-      await prisma.playbackAnalytics.create({
-        data: {
-          deviceId,
-          screenId,
-          sentAt,
-          rowCount: rows.length,
-          payload: req.body
+      const slotPlaybackRows = rows
+        .filter((r) => r && r.table === 'slot_playback' && r.row)
+        .map((r) => r.row)
+        .filter((row) => row && row.end_time && row.start_time);
+
+      if (slotPlaybackRows.length > 0 && prisma?.assetPlayLog?.create && prisma?.assetPlay?.upsert) {
+        // Resolve asset_url for slot_id where possible (legacy slots table).
+        const uniqueSlotIds = Array.from(
+          new Set(
+            slotPlaybackRows
+              .map((row) => String(row.slot_id || row.slotId || '').trim())
+              .filter(Boolean)
+          )
+        );
+
+        const slotIdToAssetUrl = new Map();
+        if (uniqueSlotIds.length > 0 && prisma?.slots?.findMany) {
+          const slots = await prisma.slots.findMany({
+            where: { id: { in: uniqueSlotIds } },
+            select: { id: true, asset_url: true }
+          });
+          for (const s of slots || []) {
+            if (s?.id && s?.asset_url) slotIdToAssetUrl.set(String(s.id), String(s.asset_url));
+          }
         }
-      });
-    } catch (dbError) {
-      if (dbError?.code === 'P2021') {
-        logger.warn('[SIGNAGE] PlaybackAnalytics table missing, skipping analytics sync persist', {
-          deviceId,
-          screenId,
-          code: dbError.code,
-          table: dbError.meta?.table
-        });
-      } else {
-        throw dbError;
+
+        for (const row of slotPlaybackRows) {
+          const slotId = String(row.slot_id || row.slotId || '').trim();
+          const campaignId = String(row.campaign_id || row.campaignId || '').trim() || null;
+          const startTime = new Date(String(row.start_time || row.startTime));
+          const endTime = new Date(String(row.end_time || row.endTime));
+          const durationSeconds = Number(row.duration ?? null);
+          const durationMs = Number.isFinite(durationSeconds) ? Math.max(0, Math.round(durationSeconds * 1000)) : null;
+
+          if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())) continue;
+
+          const playDate = new Date(Date.UTC(startTime.getUTCFullYear(), startTime.getUTCMonth(), startTime.getUTCDate()));
+          const assetUrl =
+            String(row.asset_url || row.assetUrl || '').trim() ||
+            (slotId ? slotIdToAssetUrl.get(slotId) : '') ||
+            '';
+
+          // If we can't resolve the asset URL, skip writing to aggregate tables.
+          if (!assetUrl) continue;
+
+          // 1) Detailed log (append-only)
+          // Idempotency guard: players may retry the same batch on flaky networks.
+          // Avoid inserting duplicate rows when the identifying fields match.
+          const existing = await prisma.assetPlayLog.findFirst({
+            where: {
+              screenId,
+              assetUrl,
+              playedAt: endTime,
+              campaignId,
+              durationMs: durationMs ?? undefined
+            },
+            select: { id: true }
+          });
+
+          const inserted = !existing;
+          if (inserted) {
+            await prisma.assetPlayLog.create({
+              data: {
+                screenId,
+                assetUrl,
+                playedAt: endTime,
+                campaignId,
+                durationMs,
+                success: true
+              }
+            });
+          }
+
+          // 2) Per-day aggregate (idempotent-ish by unique key)
+          if (inserted) {
+            await prisma.assetPlay.upsert({
+              where: {
+                unique_asset_play: {
+                  screenId,
+                  assetUrl,
+                  campaignId,
+                  playDate
+                }
+              },
+              create: {
+                screenId,
+                assetUrl,
+                playDate,
+                playCount: 1,
+                campaignId
+              },
+              update: {
+                playCount: { increment: 1 }
+              }
+            });
+          }
+        }
       }
+    } catch (structuredError) {
+      logger.error('[SIGNAGE] Structured playback analytics persist failed (continuing)', {
+        deviceId,
+        screenId,
+        message: structuredError?.message || String(structuredError)
+      });
+    }
+
+    // Best-effort: if the model/table is not available yet, don't break the player.
+    if (prisma?.playbackAnalytics?.create) {
+      try {
+        await prisma.playbackAnalytics.create({
+          data: {
+            deviceId,
+            screenId,
+            sentAt,
+            rowCount: rows.length,
+            payload: req.body
+          }
+        });
+      } catch (dbError) {
+        if (dbError?.code === 'P2021') {
+          logger.warn('[SIGNAGE] PlaybackAnalytics table missing, skipping analytics sync persist', {
+            deviceId,
+            screenId,
+            code: dbError.code,
+            table: dbError.meta?.table
+          });
+        } else {
+          logger.error('[SIGNAGE] PlaybackAnalytics persist failed, continuing', {
+            deviceId,
+            screenId,
+            message: dbError?.message || String(dbError)
+          });
+        }
+      }
+    } else {
+      logger.warn('[SIGNAGE] PlaybackAnalytics model not available, skipping analytics sync persist', { deviceId, screenId });
     }
 
     return res.json({ success: true, received: rows.length });

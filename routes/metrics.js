@@ -6,6 +6,7 @@ const roleAuth = require('../middleware/roleAuth');
 
 // Campaign metrics
 router.get('/campaign-metrics/:campaignId', metricsController.getCampaignMetrics);
+router.get('/campaign-slot-analytics/:campaignId', metricsController.getCampaignSlotAnalytics);
 
 // Admin dashboard stats
 router.get('/admin-dashboard-stats', metricsController.getAdminDashboardStats);

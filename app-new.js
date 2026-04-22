@@ -102,9 +102,10 @@ if (!isServerless) {
 app.set('io', io);
 
 // Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(bodyParser.json());
+// Increase JSON body limits for analytics sync payloads (default 100kb is too small).
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.JSON_BODY_LIMIT || '2mb' }));
+app.use(bodyParser.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }));
 const allowedOrigins = new Set([
   'http://localhost:3000',
   'http://localhost:3003',
@@ -322,7 +323,10 @@ app.use('/api/v1', playerV1Routes);
 app.use('/api', availabilityRoutes);
 
 // Metrics and Analytics routes
+// Back-compat: historically mounted at `/api/*`.
 app.use('/api', metricsRoutes);
+// Explicit metrics prefix for newer clients.
+app.use('/api/metrics', metricsRoutes);
 
 // Business Profile routes
 app.use('/api', businessRoutes);
@@ -434,6 +438,14 @@ app.use((err, req, res, next) => {
   // Don't send error response for OPTIONS requests
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+  if (err?.type === 'entity.too.large') {
+    logger.warn('Request body too large', {
+      path: req.originalUrl,
+      limit: err?.limit,
+      length: err?.length
+    });
+    return res.status(413).json({ error: 'payload_too_large' });
   }
   logger.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });

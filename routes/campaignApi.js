@@ -260,7 +260,7 @@ function getFileType(url) {
 // Track asset play
 router.post('/track-play', async (req, res) => {
   try {
-    const { screen_id, asset_url, played_at, local_file_path } = req.body;
+    const { screen_id, asset_url, played_at, local_file_path, campaign_id, duration_ms, duration } = req.body;
     const requestTime = new Date().toISOString();
     const clientIP = req.ip || req.connection.remoteAddress || 'Unknown';
 
@@ -270,6 +270,9 @@ router.post('/track-play', async (req, res) => {
     logger.info(`Screen ID: ${screen_id}`);
     logger.info(`Asset URL: ${asset_url}`);
     logger.info(`Played At: ${played_at}`);
+    if (campaign_id) logger.info(`Campaign ID: ${campaign_id}`);
+    if (duration_ms != null) logger.info(`Duration MS: ${duration_ms}`);
+    if (duration != null) logger.info(`Duration (s): ${duration}`);
     if (local_file_path) {
       logger.info(`Local File Path: ${local_file_path}`);
     }
@@ -283,14 +286,89 @@ router.post('/track-play', async (req, res) => {
       logger.info(`💾 Local storage path: ${local_file_path}`);
     }
 
-    // Log the play to database
+    const timestamp = played_at ? new Date(played_at) : new Date();
+    const playDate = timestamp.toISOString().split('T')[0];
+
+    let parsedDurationMs =
+      duration_ms != null && !Number.isNaN(Number(duration_ms))
+        ? Number(duration_ms)
+        : duration != null && !Number.isNaN(Number(duration))
+          ? Math.round(Number(duration) * 1000)
+          : null;
+
+    // Prefer explicit campaign_id from player; otherwise infer from generated slots.
+    let resolvedCampaignId = campaign_id ? String(campaign_id) : null;
+    if (!resolvedCampaignId || parsedDurationMs == null) {
+      const slotRecords = await prisma.generatedSlot.findMany({
+        where: { screenId: { has: String(screen_id) } }
+      });
+      const slot = flattenGeneratedSlotRecords(slotRecords, {
+        screenId: screen_id,
+        assetUrl: asset_url,
+        activeAt: timestamp
+      })[0];
+      if (!resolvedCampaignId) resolvedCampaignId = slot?.campaignId || null;
+      if (parsedDurationMs == null && slot?.duration != null && !Number.isNaN(Number(slot.duration))) {
+        parsedDurationMs = Math.round(Number(slot.duration) * 1000);
+      }
+    }
+
+    // Log the play to database (detailed log)
     await prisma.assetPlayLog.create({
       data: {
         screenId: screen_id,
         assetUrl: asset_url,
-        playedAt: new Date(played_at)
+        playedAt: timestamp,
+        campaignId: resolvedCampaignId,
+        durationMs: parsedDurationMs
       }
     });
+
+    // Maintain daily aggregate table for dashboard/metrics use-cases.
+    if (resolvedCampaignId) {
+      await prisma.assetPlay.upsert({
+        where: {
+          screenId_assetUrl_campaignId_playDate: {
+            screenId: String(screen_id),
+            assetUrl: String(asset_url),
+            campaignId: String(resolvedCampaignId),
+            playDate: new Date(playDate)
+          }
+        },
+        update: { playCount: { increment: 1 } },
+        create: {
+          screenId: String(screen_id),
+          assetUrl: String(asset_url),
+          campaignId: String(resolvedCampaignId),
+          playDate: new Date(playDate),
+          playCount: 1
+        }
+      });
+    } else {
+      const existing = await prisma.assetPlay.findFirst({
+        where: {
+          screenId: String(screen_id),
+          assetUrl: String(asset_url),
+          playDate: new Date(playDate)
+        }
+      });
+      if (existing) {
+        await prisma.assetPlay.update({
+          where: { id: existing.id },
+          data: { playCount: { increment: 1 } }
+        });
+      } else {
+        await prisma.assetPlay.create({
+          data: {
+            screenId: String(screen_id),
+            assetUrl: String(asset_url),
+            campaignId: null,
+            playDate: new Date(playDate),
+            playCount: 1
+          }
+        });
+      }
+    }
 
     logger.info(`✅ Play tracked successfully: Screen ${screen_id}, Asset ${asset_url}`);
     res.json({ message: 'Play tracked successfully' });

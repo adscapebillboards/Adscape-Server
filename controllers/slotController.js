@@ -150,11 +150,18 @@ const getAssetsByScreen = async (req, res) => {
 
 // Track asset play
 const trackAssetPlay = async (req, res) => {
-  const { screen_id, asset_url, played_at, local_file_path } = req.body;
+  const { screen_id, asset_url, played_at, local_file_path, campaign_id, duration_ms, duration } = req.body;
 
   try {
     const timestamp = played_at ? new Date(played_at) : new Date();
     const playDate = timestamp.toISOString().split("T")[0];
+
+    let parsedDurationMs =
+      duration_ms != null && !Number.isNaN(Number(duration_ms))
+        ? Number(duration_ms)
+        : duration != null && !Number.isNaN(Number(duration))
+          ? Math.round(Number(duration) * 1000)
+          : null;
 
     // Log local file path if provided
     if (local_file_path) {
@@ -162,40 +169,47 @@ const trackAssetPlay = async (req, res) => {
       logger.info && logger.info(`💾 Asset local storage path: ${local_file_path} (Screen: ${screen_id}, Asset: ${asset_url})`);
     }
 
-    // Fetch campaign_id from generated_slots
-    const slotRecords = await prisma.generatedSlot.findMany({
-      where: {
-        screenId: { has: String(screen_id) }
-      }
-    });
-    const slot = flattenGeneratedSlotRecords(slotRecords, {
-      screenId: screen_id,
-      assetUrl: asset_url,
-      activeAt: timestamp
-    })[0];
+    // Prefer explicit campaign_id from player; otherwise infer from generated slots
+    let resolvedCampaignId = campaign_id ? String(campaign_id) : null;
+    if (!resolvedCampaignId || parsedDurationMs == null) {
+      const slotRecords = await prisma.generatedSlot.findMany({
+        where: {
+          screenId: { has: String(screen_id) }
+        }
+      });
+      const slot = flattenGeneratedSlotRecords(slotRecords, {
+        screenId: screen_id,
+        assetUrl: asset_url,
+        activeAt: timestamp
+      })[0];
 
-    const campaign_id = slot?.campaignId || null;
+      if (!resolvedCampaignId) resolvedCampaignId = slot?.campaignId || null;
+      if (parsedDurationMs == null && slot?.duration != null && !Number.isNaN(Number(slot.duration))) {
+        parsedDurationMs = Math.round(Number(slot.duration) * 1000);
+      }
+    }
 
     // Save detailed play log
     await prisma.assetPlayLog.create({
       data: {
         screenId: screen_id,
         assetUrl: asset_url,
-        campaignId: campaign_id,
-        playedAt: timestamp
+        campaignId: resolvedCampaignId,
+        playedAt: timestamp,
+        durationMs: parsedDurationMs
       }
     });
 
     // Update daily count using upsert
     // Handle null campaignId by using the appropriate unique constraint
-    if (campaign_id) {
+    if (resolvedCampaignId) {
       // Use unique constraint with campaignId when it's not null
       await prisma.assetPlay.upsert({
         where: {
           screenId_assetUrl_campaignId_playDate: {
             screenId: screen_id,
             assetUrl: asset_url,
-            campaignId: campaign_id,
+            campaignId: resolvedCampaignId,
             playDate: new Date(playDate)
           }
         },
@@ -207,7 +221,7 @@ const trackAssetPlay = async (req, res) => {
         create: {
           screenId: screen_id,
           assetUrl: asset_url,
-          campaignId: campaign_id,
+          campaignId: resolvedCampaignId,
           playDate: new Date(playDate),
           playCount: 1
         }

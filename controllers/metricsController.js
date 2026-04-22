@@ -1,5 +1,61 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { Prisma } = require('@prisma/client');
+
+// Per-campaign slot analytics (plays + minutes per day, optionally filtered by screenId)
+const getCampaignSlotAnalytics = async (req, res) => {
+  const { campaignId } = req.params;
+  const screenId = String(req.query?.screenId || '').trim();
+
+  try {
+    if (!campaignId) {
+      return res.status(400).json({ error: 'campaignId is required' });
+    }
+
+    // Note: we use raw SQL here to group by DATE(played_at).
+    const whereScreen = screenId ? Prisma.sql`AND screen_id = ${screenId}` : Prisma.empty;
+
+    const daily = await prisma.$queryRaw(Prisma.sql`
+      SELECT
+        DATE(played_at) AS date,
+        COUNT(1)::int AS plays,
+        COALESCE(SUM(COALESCE(duration_ms, 0)), 0)::bigint AS duration_ms
+      FROM asset_play_logs
+      WHERE campaign_id = ${campaignId}
+      ${whereScreen}
+      GROUP BY DATE(played_at)
+      ORDER BY DATE(played_at) ASC;
+    `);
+
+    const totals = await prisma.$queryRaw(Prisma.sql`
+      SELECT
+        COUNT(1)::int AS plays,
+        COALESCE(SUM(COALESCE(duration_ms, 0)), 0)::bigint AS duration_ms
+      FROM asset_play_logs
+      WHERE campaign_id = ${campaignId}
+      ${whereScreen};
+    `);
+
+    const totalRow = Array.isArray(totals) && totals.length > 0 ? totals[0] : { plays: 0, duration_ms: 0 };
+
+    return res.json({
+      campaignId,
+      screenId: screenId || null,
+      totals: {
+        plays: Number(totalRow.plays || 0),
+        minutes: Math.round(Number(totalRow.duration_ms || 0) / 60000)
+      },
+      daily: (Array.isArray(daily) ? daily : []).map((row) => ({
+        date: String(row.date),
+        plays: Number(row.plays || 0),
+        minutes: Math.round(Number(row.duration_ms || 0) / 60000)
+      }))
+    });
+  } catch (err) {
+    logger.error('Error in campaign slot analytics:', err);
+    return res.status(500).json({ error: 'Server Error' });
+  }
+};
 
 // Get campaign metrics
 const getCampaignMetrics = async (req, res) => {
@@ -571,6 +627,7 @@ const checkAvailability = async (req, res) => {
 
 
 module.exports = {
+  getCampaignSlotAnalytics,
   getCampaignMetrics,
   getAdminDashboardStats,
   getTopPerformingBillboards,
