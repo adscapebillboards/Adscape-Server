@@ -441,3 +441,19 @@ model PlaybackStat {
   @@index([screenId, assetId])
   @@map("playback_stats_logs")
 }
+
+// Stores raw playback analytics sync batches coming from offline-first players.
+// This is intentionally append-only for audit/debugging.
+model PlaybackAnalytics {
+  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  deviceId  String   @map("device_id")
+  screenId  String   @map("screen_id")
+  sentAt    DateTime? @map("sent_at") @db.Timestamptz(6)
+  receivedAt DateTime @default(now()) @map("received_at") @db.Timestamptz(6)
+  rowCount  Int      @default(0) @map("row_count")
+  payload   Json?    // full request body, including rows
+
+  @@index([screenId], map: "idx_playback_analytics_screen")
+  @@index([receivedAt], map: "idx_playback_analytics_received_at")
+  @@map("playback_analytics")
+}

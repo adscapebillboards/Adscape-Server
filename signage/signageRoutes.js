@@ -16,5 +16,6 @@ router.put('/screens/:screenId/orientation', signageController.updateScreenOrien
 
 // Analytics Endpoints
 router.post('/analytics/upload', signageController.uploadAnalytics);
+router.post('/analytics/sync', signageController.syncPlaybackAnalytics);
 
 module.exports = router;

@@ -582,3 +582,55 @@ exports.uploadAnalytics = async (req, res) => {
     res.status(500).json({ error: 'Failed to upload analytics' });
   }
 };
+
+// POST /signage/analytics/sync
+// Stores offline-first player sync batches for playback analytics.
+exports.syncPlaybackAnalytics = async (req, res) => {
+  try {
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const screenId = String(req.body?.screenId || '').trim();
+    const sentAtRaw = req.body?.sentAt;
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+    if (!deviceId || !screenId) {
+      return res.status(400).json({ error: 'deviceId and screenId are required' });
+    }
+
+    let sentAt = null;
+    if (sentAtRaw) {
+      const parsed = new Date(String(sentAtRaw));
+      if (!Number.isNaN(parsed.getTime())) {
+        sentAt = parsed;
+      }
+    }
+
+    // Best-effort: if the table is not migrated yet, don't break the player.
+    try {
+      await prisma.playbackAnalytics.create({
+        data: {
+          deviceId,
+          screenId,
+          sentAt,
+          rowCount: rows.length,
+          payload: req.body
+        }
+      });
+    } catch (dbError) {
+      if (dbError?.code === 'P2021') {
+        logger.warn('[SIGNAGE] PlaybackAnalytics table missing, skipping analytics sync persist', {
+          deviceId,
+          screenId,
+          code: dbError.code,
+          table: dbError.meta?.table
+        });
+      } else {
+        throw dbError;
+      }
+    }
+
+    return res.json({ success: true, received: rows.length });
+  } catch (error) {
+    logger.error('Playback Analytics Sync Error:', error);
+    return res.status(500).json({ error: 'Failed to sync analytics' });
+  }
+};
