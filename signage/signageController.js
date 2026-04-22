@@ -1,5 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 
 const DEFAULT_LOGO = "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1776145745/juu3ojtpwcvhckyffskv.png";
 
@@ -278,21 +279,21 @@ exports.getAssets = async (req, res) => {
     }
 
     // 1. Prioritize modern GeneratedSlots
-    const generatedSlots = await prisma.generatedSlot.findMany({
+    const generatedSlotRecords = await prisma.generatedSlot.findMany({
         where: {
             OR: [
-                { billboardId: String(billboard.id) },
-                { billboardId: String(billboard.screen_id || '') },
-                { screenId: String(billboard.id) },
-                { screenId: String(billboard.screen_id || '') }
-            ],
-            startDate: { lte: dayEnd },
-            endDate: { gte: dayStart }
-        },
-        orderBy: [
-            { startDate: 'asc' },
-            { slotNumber: 'asc' }
-        ]
+                { billboardIds: { has: String(billboard.id) } },
+                { billboardIds: { has: String(billboard.screen_id || '') } },
+                { screenId: { has: String(billboard.id) } },
+                { screenId: { has: String(billboard.screen_id || '') } }
+            ]
+        }
+    });
+
+    const generatedSlots = flattenGeneratedSlotRecords(generatedSlotRecords).filter((slot) => {
+        const billboardMatch = [String(billboard.id), String(billboard.screen_id || '')].includes(String(slot.billboardId));
+        const screenMatch = [String(billboard.id), String(billboard.screen_id || '')].includes(String(slot.screenId || ''));
+        return (billboardMatch || screenMatch) && slot.startDate <= dayEnd && slot.endDate >= dayStart;
     });
 
     if (generatedSlots.length > 0) {
