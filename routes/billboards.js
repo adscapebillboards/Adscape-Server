@@ -35,6 +35,12 @@ router.post('/', auth, upload.array('images'), controller.addBillboard);
 // UPDATE billboard (optional: also support image uploads if needed)
 router.put('/:id', auth, controller.updateBillboard);
 
+// Configure player defaults (superadmin only)
+router.put('/:id/player-defaults', auth, roleAuth(['superadmin']), controller.updateBillboardPlayerDefaults);
+
+// Update slot 10 asset (billboard owner/admin; superadmin allowed too)
+router.put('/:id/slot10-asset', auth, roleAuth(['admin', 'publisher', 'superadmin']), controller.updateBillboardSlot10Asset);
+
 // DELETE billboard
 router.delete('/:id', auth, controller.deleteBillboard);
 

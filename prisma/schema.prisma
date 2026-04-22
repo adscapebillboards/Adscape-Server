@@ -112,6 +112,17 @@ model Billboard {
   slot_end_time        String?   @default("18:00")
   slotAvailability     Json?     @map("slot_availability") // Stores 2 months of slot data: { "DD.MM.YYYY": available_slots }
 
+  // Signage player defaults (configured by superadmin)
+  defaultAssetUrl      String?   @map("default_asset_url") @db.VarChar(500)
+  defaultAssetType     String?   @map("default_asset_type") @db.VarChar(20)
+  defaultAssetDuration Int?      @map("default_asset_duration") // seconds
+
+  // Optional slot 10 (enabled by superadmin; asset uploaded by billboard owner)
+  slot10Enabled        Boolean   @default(false) @map("slot10_enabled")
+  slot10AssetUrl       String?   @map("slot10_asset_url") @db.VarChar(500)
+  slot10AssetType      String?   @map("slot10_asset_type") @db.VarChar(20)
+  slot10AssetDuration  Int?      @map("slot10_asset_duration") // seconds
+
   @@map("billboards")
 }
 

@@ -2,23 +2,57 @@ const prisma = require('../db/db');
 const logger = require('../config/logger');
 const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 
-const DEFAULT_LOGO = "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1776145745/juu3ojtpwcvhckyffskv.png";
+const FALLBACK_DEFAULT_LOGO = "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1776145745/juu3ojtpwcvhckyffskv.png";
 
-function appendDefaultSlot(assets) {
+function inferMediaTypeFromUrl(url) {
+    const u = String(url || "").toLowerCase();
+    return u.endsWith(".mp4") || u.includes(".mp4?") ? "video" : "image";
+}
+
+function appendBillboardDefaults(assets, billboard) {
     const list = [...assets];
+
+    const defaultUrl = billboard?.defaultAssetUrl
+        || billboard?.default_asset_url
+        || (Array.isArray(billboard?.images) && billboard.images.length > 0 ? billboard.images[0] : null)
+        || FALLBACK_DEFAULT_LOGO;
+    const defaultType = String(billboard?.defaultAssetType || billboard?.default_asset_type || inferMediaTypeFromUrl(defaultUrl) || "image").toLowerCase();
+    const defaultDuration = Number(billboard?.defaultAssetDuration ?? billboard?.default_asset_duration ?? 15) || 15;
+
     list.push({
         id: "default-9",
         _id: "default-9",
-        url: DEFAULT_LOGO,
-        asset_url: DEFAULT_LOGO,
-        type: "image",
-        media_type: "image",
-        duration: 15,
+        url: defaultUrl,
+        asset_url: defaultUrl,
+        type: defaultType === "video" ? "video" : "image",
+        media_type: defaultType === "video" ? "video" : "image",
+        duration: defaultDuration,
         campaignId: "default",
         campaign_id: "default",
         slotNumber: 9,
         slot_number: 9
     });
+
+    const slot10Enabled = Boolean(billboard?.slot10Enabled ?? billboard?.slot10_enabled);
+    const slot10Url = billboard?.slot10AssetUrl || billboard?.slot10_asset_url;
+    if (slot10Enabled && slot10Url) {
+        const slot10Type = String(billboard?.slot10AssetType || billboard?.slot10_asset_type || inferMediaTypeFromUrl(slot10Url) || "image").toLowerCase();
+        const slot10Duration = Number(billboard?.slot10AssetDuration ?? billboard?.slot10_asset_duration ?? defaultDuration) || defaultDuration;
+        list.push({
+            id: "slot-10",
+            _id: "slot-10",
+            url: slot10Url,
+            asset_url: slot10Url,
+            type: slot10Type === "video" ? "video" : "image",
+            media_type: slot10Type === "video" ? "video" : "image",
+            duration: slot10Duration,
+            campaignId: "slot10",
+            campaign_id: "slot10",
+            slotNumber: 10,
+            slot_number: 10
+        });
+    }
+
     return list;
 }
 
@@ -318,7 +352,7 @@ exports.getAssets = async (req, res) => {
             };
         });
 
-        return res.json(appendDefaultSlot(slots));
+        return res.json(appendBillboardDefaults(slots, billboard));
     }
 
     // 2. Fallback to legacy DailySchedule
@@ -380,7 +414,7 @@ exports.getAssets = async (req, res) => {
                     campaignId: campaign.id
                 });
             }
-            return res.json(appendDefaultSlot(assets));
+            return res.json(appendBillboardDefaults(assets, billboard));
         }
 
         // Truly no campaigns found, return defaults
@@ -435,7 +469,7 @@ exports.getAssets = async (req, res) => {
       };
     });
 
-    res.json(appendDefaultSlot(assets));
+    res.json(appendBillboardDefaults(assets, billboard));
   } catch (error) {
     logger.error('Fetch Assets Error:', error);
     res.status(500).json({ error: 'Failed to fetch assets' });

@@ -381,6 +381,82 @@ exports.updateBillboard = async (req, res) => {
   }
 };
 
+function normalizeMediaType(value, url) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'video' || v === 'image') return v;
+  const u = String(url || '').toLowerCase();
+  return u.endsWith('.mp4') || u.includes('.mp4?') ? 'video' : 'image';
+}
+
+// Superadmin: configure default asset (slot 9) and slot10 enabled toggle.
+exports.updateBillboardPlayerDefaults = async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const user = req.user;
+
+  if (!isSuperAdminRole(user?.role)) {
+    return res.status(403).json({ error: 'Access denied. Only superadmin can update player defaults.' });
+  }
+
+  try {
+    const billboard = await prisma.billboard.findUnique({ where: { id } });
+    if (!billboard) return res.status(404).json({ error: 'Billboard not found' });
+
+    const defaultAssetUrl = 'defaultAssetUrl' in req.body ? String(req.body.defaultAssetUrl || '').trim() : undefined;
+    const defaultAssetDuration = 'defaultAssetDuration' in req.body ? Number(req.body.defaultAssetDuration) : undefined;
+    const defaultAssetType = 'defaultAssetType' in req.body ? normalizeMediaType(req.body.defaultAssetType, defaultAssetUrl) : undefined;
+    const slot10Enabled = 'slot10Enabled' in req.body ? Boolean(req.body.slot10Enabled) : undefined;
+
+    const data = {};
+    if (defaultAssetUrl !== undefined) data.defaultAssetUrl = defaultAssetUrl || null;
+    if (defaultAssetType !== undefined) data.defaultAssetType = defaultAssetType;
+    if (defaultAssetDuration !== undefined) data.defaultAssetDuration = Number.isFinite(defaultAssetDuration) && defaultAssetDuration > 0 ? Math.round(defaultAssetDuration) : null;
+    if (slot10Enabled !== undefined) data.slot10Enabled = slot10Enabled;
+
+    const updated = await prisma.billboard.update({ where: { id }, data });
+    res.json({ success: true, billboard: toApiBillboard(updated) });
+  } catch (err) {
+    logger.error('updateBillboardPlayerDefaults error', { id, error: err.message });
+    res.status(500).json({ error: 'Failed to update player defaults' });
+  }
+};
+
+// Billboard owner/admin: upload/update slot 10 asset if enabled for this billboard.
+exports.updateBillboardSlot10Asset = async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const user = req.user;
+
+  try {
+    const billboard = await prisma.billboard.findUnique({ where: { id } });
+    if (!billboard) return res.status(404).json({ error: 'Billboard not found' });
+
+    // Superadmin can update any billboard; others only their own.
+    if (!isSuperAdminRole(user?.role)) {
+      if (!user?.email || String(billboard.userId || '').toLowerCase() !== String(user.email).toLowerCase()) {
+        return res.status(403).json({ error: 'Access denied. Only the billboard owner can update slot 10 asset.' });
+      }
+    }
+
+    if (!billboard.slot10Enabled) {
+      return res.status(400).json({ error: 'Slot 10 is disabled for this billboard' });
+    }
+
+    const slot10AssetUrl = 'slot10AssetUrl' in req.body ? String(req.body.slot10AssetUrl || '').trim() : undefined;
+    const slot10AssetDuration = 'slot10AssetDuration' in req.body ? Number(req.body.slot10AssetDuration) : undefined;
+    const slot10AssetType = 'slot10AssetType' in req.body ? normalizeMediaType(req.body.slot10AssetType, slot10AssetUrl) : undefined;
+
+    const data = {};
+    if (slot10AssetUrl !== undefined) data.slot10AssetUrl = slot10AssetUrl || null;
+    if (slot10AssetType !== undefined) data.slot10AssetType = slot10AssetType;
+    if (slot10AssetDuration !== undefined) data.slot10AssetDuration = Number.isFinite(slot10AssetDuration) && slot10AssetDuration > 0 ? Math.round(slot10AssetDuration) : null;
+
+    const updated = await prisma.billboard.update({ where: { id }, data });
+    res.json({ success: true, billboard: toApiBillboard(updated) });
+  } catch (err) {
+    logger.error('updateBillboardSlot10Asset error', { id, error: err.message });
+    res.status(500).json({ error: 'Failed to update slot 10 asset' });
+  }
+};
+
 // Delete
 exports.deleteBillboard = async (req, res) => {
   const { id } = req.params;
