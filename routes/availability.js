@@ -1,6 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { getBillboardAvailability, getAvailabilitySummaryByDate, getBillboardSlots } = require('../controllers/availabilityController');
+const {
+  getBillboardAvailability,
+  getAvailabilitySummaryByDate,
+  getBillboardSlots,
+  generateBillboardAvailability
+} = require('../controllers/availabilityController');
 
 // Billboard-specific availability
 router.get('/billboards/:billboardId/availability', getBillboardAvailability);
@@ -11,8 +16,10 @@ router.get('/billboards/:billboardId/slots', getBillboardSlots);
 // Admin summary by date
 router.get('/availability/summary', getAvailabilitySummaryByDate);
 
-module.exports = router;
+// Generate and persist availability rows for all billboards
+router.post('/availability/generate', generateBillboardAvailability);
 
+module.exports = router;
 
 
 

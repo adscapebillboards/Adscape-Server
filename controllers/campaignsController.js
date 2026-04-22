@@ -2,6 +2,7 @@ const prisma = require('../db/db');
 const logger = require('../config/logger');
 const { isSuperAdminRole } = require('../utils/roles');
 const { generateSlots: sharedGenerateSlots } = require('../utils/slotGenerator');
+const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 
 const createCampaign = async (req, res) => {
   try {
@@ -328,14 +329,13 @@ const getCampaignWithBillboardStatuses = async (req, res) => {
     }
 
     // Get slot counts for each billboard
+    const generatedSlotRecord = await prisma.generatedSlot.findUnique({
+      where: { campaignId: String(id) }
+    });
+    const flatGeneratedSlots = flattenGeneratedSlotRecords(generatedSlotRecord ? [generatedSlotRecord] : []);
     const billboardsWithSlotCounts = await Promise.all(
       billboards.map(async (billboard) => {
-        const slotCount = await prisma.generatedSlot.count({
-          where: {
-            billboardId: billboard.id,
-            campaignId: id
-          }
-        });
+        const slotCount = flatGeneratedSlots.filter(slot => String(slot.billboardId) === String(billboard.id)).length;
 
         return {
           ...billboard,

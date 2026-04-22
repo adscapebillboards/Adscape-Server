@@ -1,5 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { flattenGeneratedSlotRecords } = require('./generatedSlotFormat');
 
 /**
  * Asset Cleanup Scheduler
@@ -73,23 +74,9 @@ class AssetCleanupScheduler {
       const today = new Date();
       today.setHours(0, 0, 0, 0); // Start of today
 
-      // Find expired slots (end_date < today)
-      const expiredSlots = await prisma.generatedSlot.findMany({
-        where: {
-          endDate: {
-            lt: today
-          }
-        },
-        select: {
-          id: true,
-          campaignId: true,
-          billboardId: true,
-          assetUrl: true,
-          endDate: true,
-          slotNumber: true,
-          screenId: true
-        }
-      });
+      const slotRecords = await prisma.generatedSlot.findMany();
+      const expiredSlots = flattenGeneratedSlotRecords(slotRecords)
+        .filter(slot => slot.endDate < today);
 
       if (expiredSlots.length === 0) {
         logger.info('✅ No expired assets found');
@@ -130,16 +117,46 @@ class AssetCleanupScheduler {
         });
       }
 
-      // Delete expired slots
-      const deleteResult = await prisma.generatedSlot.deleteMany({
-        where: {
-          endDate: {
-            lt: today
+      let deletedCount = 0;
+      for (const record of slotRecords) {
+        const updatedSlots = {};
+        let recordChanged = false;
+
+        for (const [billboardId, billboardSlots] of Object.entries(record.slots || {})) {
+          const activeSlots = (Array.isArray(billboardSlots) ? billboardSlots : []).filter(slot => {
+            const endIso = slot.timerange?.endDateIso || slot.endDate || slot.end_date;
+            const endDate = endIso ? new Date(endIso) : null;
+            const isExpired = endDate && !Number.isNaN(endDate.getTime()) && endDate < today;
+            if (isExpired) {
+              deletedCount += 1;
+              recordChanged = true;
+            }
+            return !isExpired;
+          });
+
+          if (activeSlots.length > 0) {
+            updatedSlots[billboardId] = activeSlots;
+          } else if (Array.isArray(billboardSlots) && billboardSlots.length > 0) {
+            recordChanged = true;
           }
         }
-      });
 
-      logger.info(`✅ Cleaned up ${deleteResult.count} expired assets`);
+        if (recordChanged) {
+          if (Object.keys(updatedSlots).length === 0) {
+            await prisma.generatedSlot.delete({ where: { id: record.id } });
+          } else {
+            await prisma.generatedSlot.update({
+              where: { id: record.id },
+              data: {
+                slots: updatedSlots,
+                billboardIds: Object.keys(updatedSlots)
+              }
+            });
+          }
+        }
+      }
+
+      logger.info(`✅ Cleaned up ${deletedCount} expired assets`);
 
       // TODO: Notify players to remove expired assets from local storage
       await this.notifyPlayersOfCleanup(expiredSlots);
@@ -192,14 +209,10 @@ class AssetCleanupScheduler {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      const totalSlots = await prisma.generatedSlot.count();
-      const expiredSlots = await prisma.generatedSlot.count({
-        where: {
-          endDate: {
-            lt: today
-          }
-        }
-      });
+      const slotRecords = await prisma.generatedSlot.findMany();
+      const allSlots = flattenGeneratedSlotRecords(slotRecords);
+      const totalSlots = allSlots.length;
+      const expiredSlots = allSlots.filter(slot => slot.endDate < today).length;
       const activeSlots = totalSlots - expiredSlots;
 
       return {
@@ -251,66 +264,16 @@ module.exports = assetCleanupScheduler;
 async function runAvailabilityMaintenance() {
   try {
     const now = new Date();
-    const firstOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const endOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0);
     const firstOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
     // Purge old cache
     await prisma.billboardAvailability.deleteMany({ where: { date: { lt: firstOfPrevMonth } } });
 
-    // Precompute two months for all billboards
-    const boards = await prisma.billboard.findMany({ select: { id: true } });
-    for (const b of boards) {
-      await precomputeBillboardAvailability(b.id, firstOfThisMonth, endOfNextMonth);
-    }
+    const { generateAvailabilityForAllBillboards } = require('../controllers/availabilityController');
+    await generateAvailabilityForAllBillboards(2);
     logger.info('Availability maintenance completed');
   } catch (e) {
     logger.warn('Availability maintenance failed:', e.message);
-  }
-}
-
-async function precomputeBillboardAvailability(billboardId, start, end) {
-  try {
-    const TOTAL_SLOTS_PER_DAY = 8;
-    const { startOfDay, endOfDay } = require('../controllers/availabilityController');
-    const overlappingCampaigns = await prisma.campaign.findMany({
-      where: { startDate: { lte: endOfDay(end) }, endDate: { gte: startOfDay(start) } },
-      select: { billboards: true, startDate: true, endDate: true }
-    });
-    const counts = {};
-    for (const camp of overlappingCampaigns) {
-      let boards = camp.billboards;
-      if (!boards) continue;
-      if (typeof boards === 'string') { try { boards = JSON.parse(boards); } catch { continue; } }
-      if (!Array.isArray(boards)) continue;
-      const match = boards.find(b => String(b?.id) === String(billboardId));
-      if (!match) continue;
-      const bs = match.bookingDetails?.startDate || match.startDate || camp.startDate;
-      const be = match.bookingDetails?.endDate || match.endDate || camp.endDate;
-      if (!bs || !be) continue;
-      const rs = startOfDay(new Date(bs)) > start ? startOfDay(new Date(bs)) : startOfDay(start);
-      const re = endOfDay(new Date(be)) < end ? endOfDay(new Date(be)) : endOfDay(end);
-      for (let d = new Date(rs); d <= re; d.setDate(d.getDate() + 1)) {
-        const key = d.toISOString().slice(0,10);
-        counts[key] = (counts[key] || 0) + 1;
-      }
-    }
-    const ops = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const key = d.toISOString().slice(0,10);
-      const booked = Array.from({ length: Math.min(TOTAL_SLOTS_PER_DAY, counts[key] || 0) }, (_, i) => i + 1);
-      const unbooked = [];
-      for (let i = booked.length + 1; i <= TOTAL_SLOTS_PER_DAY; i++) unbooked.push(i);
-      const day = new Date(key + 'T00:00:00Z');
-      ops.push(prisma.billboardAvailability.upsert({
-        where: { billboardId_date: { billboardId: String(billboardId), date: day } },
-        update: { availability: { date: key, booked, unbooked, totalSlots: TOTAL_SLOTS_PER_DAY } },
-        create: { billboardId: String(billboardId), date: day, availability: { date: key, booked, unbooked, totalSlots: TOTAL_SLOTS_PER_DAY } }
-      }));
-    }
-    if (ops.length) await prisma.$transaction(ops);
-  } catch (e) {
-    logger.warn('Precompute availability failed:', e.message);
   }
 }
 

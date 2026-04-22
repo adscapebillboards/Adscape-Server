@@ -1,28 +1,12 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
 const { v4: uuidv4 } = require('uuid');
+const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 
 // Get all slots
 const getAllSlots = async (req, res) => {
   try {
-    const slots = await prisma.generatedSlot.findMany({
-      include: {
-        campaign: {
-          select: {
-            id: true,
-            campaignName: true,
-            status: true
-          }
-        },
-        billboard: {
-          select: {
-            id: true,
-            location: true,
-            city: true
-          }
-        }
-      }
-    });
+    const slots = await prisma.generatedSlot.findMany();
     logger.db('SELECT', 'All slots fetched');
     res.json(slots);
   } catch (err) {
@@ -40,21 +24,13 @@ const getSlotsByBillboard = async (req, res) => {
   }
 
   try {
-    const slots = await prisma.generatedSlot.findMany({
-      where: {
-        billboardId: billboard_id
-      },
-      select: {
-        id: true,
-        startDate: true,
-        endDate: true,
-        slotNumber: true
-      },
-      orderBy: [
-        { startDate: 'asc' },
-        { slotNumber: 'asc' }
-      ]
-    });
+    const records = await prisma.generatedSlot.findMany();
+    const slots = flattenGeneratedSlotRecords(records, { billboardId: billboard_id }).map(slot => ({
+      id: slot.id,
+      startDate: slot.startDate,
+      endDate: slot.endDate,
+      slotNumber: slot.slotNumber
+    }));
 
     logger.db('SELECT', `Slots fetched for billboard ${billboard_id}`);
     res.json(slots);
@@ -76,13 +52,15 @@ const getAssetsByScreen = async (req, res) => {
   console.info('[ASSETS] Incoming request', { screen_id, window: `${start.toISOString()} - ${tomorrowEnd.toISOString()}` });
 
   try {
-    let slots = await prisma.generatedSlot.findMany({
+    const records = await prisma.generatedSlot.findMany({
       where: {
-        screenId: screen_id,
-        startDate: { gte: start },
-        endDate: { lte: tomorrowEnd }
-      },
-      orderBy: [{ startDate: 'asc' }, { slotNumber: 'asc' }]
+        screenId: { has: String(screen_id) }
+      }
+    });
+    let slots = flattenGeneratedSlotRecords(records, {
+      screenId: screen_id,
+      startGte: start,
+      endLte: tomorrowEnd
     });
 
     if (!slots || slots.length === 0) {
@@ -91,22 +69,16 @@ const getAssetsByScreen = async (req, res) => {
         `Screen ${screen_id} window ${start.toISOString()} - ${tomorrowEnd.toISOString()}: 0 assets. Falling back to any upcoming slots.`
       );
 
-      slots = await prisma.generatedSlot.findMany({
-        where: {
-          screenId: screen_id,
-          startDate: { gte: start }
-        },
-        orderBy: [{ startDate: 'asc' }, { slotNumber: 'asc' }],
-        take: 20
-      });
+      slots = flattenGeneratedSlotRecords(records, {
+        screenId: screen_id,
+        startGte: start
+      }).slice(0, 20);
 
       // If no future slots, just grab the latest slots available
       if (!slots || slots.length === 0) {
-        slots = await prisma.generatedSlot.findMany({
-          where: { screenId: screen_id },
-          orderBy: [{ startDate: 'desc' }, { slotNumber: 'asc' }],
-          take: 20
-        });
+        slots = flattenGeneratedSlotRecords(records, { screenId: screen_id })
+          .sort((a, b) => b.startDate - a.startDate || Number(a.slotNumber || 0) - Number(b.slotNumber || 0))
+          .slice(0, 20);
       }
 
       if (!slots || slots.length === 0) {
@@ -191,21 +163,16 @@ const trackAssetPlay = async (req, res) => {
     }
 
     // Fetch campaign_id from generated_slots
-    const slot = await prisma.generatedSlot.findFirst({
+    const slotRecords = await prisma.generatedSlot.findMany({
       where: {
-        screenId: screen_id,
-        assetUrl: asset_url,
-        startDate: {
-          lte: timestamp
-        },
-        endDate: {
-          gte: timestamp
-        }
-      },
-      select: {
-        campaignId: true
+        screenId: { has: String(screen_id) }
       }
     });
+    const slot = flattenGeneratedSlotRecords(slotRecords, {
+      screenId: screen_id,
+      assetUrl: asset_url,
+      activeAt: timestamp
+    })[0];
 
     const campaign_id = slot?.campaignId || null;
 

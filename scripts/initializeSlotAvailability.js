@@ -1,7 +1,7 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
 const { 
-  updateBillboardSlotAvailabilityJSON
+  generateAvailabilityForAllBillboards
 } = require('../controllers/availabilityController');
 
 /**
@@ -12,66 +12,20 @@ const {
 async function initializeAllBillboardSlots() {
   try {
     console.log('🚀 Starting slot availability initialization for all billboards...\n');
-
-    // Get all approved billboards
-    const billboards = await prisma.billboard.findMany({
-      where: {
-        status: 'APPROVED'
-      },
-      select: {
-        id: true,
-        name: true,
-        location: true,
-        max_slots_per_day: true
-      }
-    });
-
-    console.log(`📊 Found ${billboards.length} approved billboards\n`);
-
-    if (billboards.length === 0) {
-      console.log('⚠️  No approved billboards found. Exiting.');
-      return;
-    }
-
-    console.log(`📅 Generating 2 months of slot availability data for each billboard\n`);
-
-    let successCount = 0;
-    let errorCount = 0;
-
-    // Process each billboard
-    for (let i = 0; i < billboards.length; i++) {
-      const billboard = billboards[i];
-      const billboardId = String(billboard.id);
-      
-      try {
-        console.log(`[${i + 1}/${billboards.length}] Processing billboard: ${billboardId}`);
-        console.log(`   Name: ${billboard.name || 'N/A'}`);
-        console.log(`   Location: ${billboard.location || 'N/A'}`);
-        console.log(`   Max slots/day: ${billboard.max_slots_per_day || 8}`);
-
-        // Use the helper function to update slot availability JSON
-        await updateBillboardSlotAvailabilityJSON(billboardId);
-
-        console.log(`   ✅ Slot availability JSON updated (2 months of data)\n`);
-        successCount++;
-      } catch (error) {
-        console.error(`   ❌ Error processing billboard ${billboardId}:`, error.message);
-        errorCount++;
-        console.log('');
-      }
-    }
+    const result = await generateAvailabilityForAllBillboards(2);
 
     console.log('\n' + '='.repeat(60));
     console.log('📊 Initialization Summary:');
-    console.log(`   Total billboards: ${billboards.length}`);
-    console.log(`   ✅ Success: ${successCount}`);
-    console.log(`   ❌ Errors: ${errorCount}`);
+    console.log(`   Date range: ${result.start} to ${result.end}`);
+    console.log(`   Total billboards: ${result.totalBillboards}`);
+    console.log(`   ✅ Success: ${result.success}`);
+    console.log(`   ❌ Errors: ${result.failed}`);
     console.log('='.repeat(60));
 
-    if (errorCount === 0) {
+    if (result.failed === 0) {
       console.log('\n🎉 All billboards initialized successfully!');
     } else {
-      console.log(`\n⚠️  Completed with ${errorCount} error(s).`);
+      console.log(`\n⚠️  Completed with ${result.failed} error(s).`);
     }
 
   } catch (error) {

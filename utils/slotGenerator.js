@@ -1,6 +1,7 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
 const { getDeveloperMode } = require('./developerMode');
+const { buildSlotItem, flattenGeneratedSlotRecords, getDateKey } = require('./generatedSlotFormat');
 
 function parseDateInput(value) {
   if (!value) return null;
@@ -12,10 +13,6 @@ function parseDateInput(value) {
 
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function getUTCDateKey(date) {
-  return date.toISOString().slice(0, 10);
 }
 
 function getUTCDateBounds(dateKey) {
@@ -34,34 +31,11 @@ function enumerateDateKeys(startDate, endDate) {
   final.setUTCHours(0, 0, 0, 0);
 
   while (cursor <= final) {
-    keys.push(getUTCDateKey(cursor));
+    keys.push(cursor.toISOString().slice(0, 10));
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
 
   return keys;
-}
-
-function buildSlotIndex(existingSlots, campaignId) {
-  const occupiedByDate = new Map();
-  const campaignDates = new Set();
-
-  for (const slot of existingSlots) {
-    const dateKey = getUTCDateKey(slot.startDate);
-
-    if (!occupiedByDate.has(dateKey)) {
-      occupiedByDate.set(dateKey, new Set());
-    }
-
-    if (slot.slotNumber != null) {
-      occupiedByDate.get(dateKey).add(slot.slotNumber);
-    }
-
-    if (String(slot.campaignId) === String(campaignId)) {
-      campaignDates.add(dateKey);
-    }
-  }
-
-  return { occupiedByDate, campaignDates };
 }
 
 function findFirstAvailableSlot(occupiedSlots, maxSlotsPerDay) {
@@ -91,12 +65,46 @@ async function resolveBillboardMetadata(billboardId) {
   });
 }
 
-async function generateSlots(campaign) {
+async function getExistingFlatSlots(startDate, endDate) {
+  const records = await prisma.generatedSlot.findMany();
+  return flattenGeneratedSlotRecords(records, {
+    startGte: startDate,
+    endLte: endDate
+  });
+}
+
+function buildSlotIndex(existingSlots, campaignId) {
+  const occupiedByBillboardDate = new Map();
+  const campaignBillboardDates = new Set();
+
+  for (const slot of existingSlots) {
+    const dateKey = getDateKey(slot.startDate);
+    if (!dateKey) continue;
+
+    const billboardDateKey = `${slot.billboardId}:${dateKey}`;
+    if (!occupiedByBillboardDate.has(billboardDateKey)) {
+      occupiedByBillboardDate.set(billboardDateKey, new Set());
+    }
+
+    if (slot.slotNumber != null) {
+      occupiedByBillboardDate.get(billboardDateKey).add(slot.slotNumber);
+    }
+
+    if (String(slot.campaignId) === String(campaignId)) {
+      campaignBillboardDates.add(billboardDateKey);
+    }
+  }
+
+  return { occupiedByBillboardDate, campaignBillboardDates };
+}
+
+async function generateSlots(campaign, options = {}) {
   try {
     const billboards = campaign.billboards;
     const developerModeEnabled = await getDeveloperMode();
+    const createdFor = options.createdFor || (developerModeEnabled ? 'Development' : 'Production');
 
-    logger.info('Starting slot generation for campaign:', campaign.id);
+    logger.info('Starting grouped slot generation for campaign:', campaign.id);
     logger.info('Developer mode state for slot generation:', developerModeEnabled);
 
     if (!Array.isArray(billboards)) {
@@ -109,9 +117,12 @@ async function generateSlots(campaign) {
       return;
     }
 
+    const preparedBillboards = [];
+    const allDateKeys = [];
+
     for (const billboard of billboards) {
       const billboardId = String(billboard.id);
-      const assetUrl = billboard.files?.[0];
+      const assetUrl = billboard.files?.[0] || billboard.creative || billboard.images?.[0];
       const bookingStart = billboard.assetScheduling?.assetStartDate || billboard.bookingDetails?.startDate || billboard.startDate;
       const bookingEnd = billboard.assetScheduling?.assetEndDate || billboard.bookingDetails?.endDate || billboard.endDate;
 
@@ -158,83 +169,97 @@ async function generateSlots(campaign) {
         8
       );
       const duration = toPositiveInt(billboard.assetScheduling?.duration || billboard.adDuration, 15);
-
       const dateKeys = enumerateDateKeys(effectiveStartDate, endDate);
-      if (dateKeys.length === 0) {
-        continue;
-      }
 
-      const overallRange = {
-        gte: getUTCDateBounds(dateKeys[0]).start,
-        lte: getUTCDateBounds(dateKeys[dateKeys.length - 1]).end
-      };
-
-      const existingSlots = await prisma.generatedSlot.findMany({
-        where: {
-          billboardId,
-          startDate: overallRange
-        },
-        select: {
-          startDate: true,
-          slotNumber: true,
-          campaignId: true
-        },
-        orderBy: [
-          { startDate: 'asc' },
-          { slotNumber: 'asc' }
-        ]
+      preparedBillboards.push({
+        billboardId,
+        assetUrl,
+        screenId: screenId ? String(screenId) : null,
+        maxSlotsPerDay,
+        duration,
+        dateKeys
       });
+      allDateKeys.push(...dateKeys);
+    }
 
-      const { occupiedByDate, campaignDates } = buildSlotIndex(existingSlots, campaign.id);
-      const slotsToCreate = [];
+    if (preparedBillboards.length === 0 || allDateKeys.length === 0) {
+      logger.warn('No valid billboards found for grouped slot generation', { campaignId: campaign.id });
+      return;
+    }
 
-      for (const dateKey of dateKeys) {
-        if (campaignDates.has(dateKey)) {
-          logger.slot(`Skipped: campaign ${campaign.id} already has a slot for ${billboardId} on ${dateKey}`);
+    const rangeStart = getUTCDateBounds(allDateKeys.sort()[0]).start;
+    const rangeEnd = getUTCDateBounds(allDateKeys.sort()[allDateKeys.length - 1]).end;
+    const existingFlatSlots = await getExistingFlatSlots(rangeStart, rangeEnd);
+    const { occupiedByBillboardDate, campaignBillboardDates } = buildSlotIndex(existingFlatSlots, campaign.id);
+
+    const slotsByBillboard = {};
+    const billboardIds = [];
+    const screenIds = [];
+
+    for (const prepared of preparedBillboards) {
+      slotsByBillboard[prepared.billboardId] = [];
+      billboardIds.push(prepared.billboardId);
+      if (prepared.screenId) screenIds.push(prepared.screenId);
+
+      for (const dateKey of prepared.dateKeys) {
+        const billboardDateKey = `${prepared.billboardId}:${dateKey}`;
+        if (campaignBillboardDates.has(billboardDateKey)) {
+          logger.slot(`Skipped: campaign ${campaign.id} already has a slot for ${prepared.billboardId} on ${dateKey}`);
           continue;
         }
 
-        const occupiedSlots = occupiedByDate.get(dateKey) || new Set();
-        const slotNumber = findFirstAvailableSlot(occupiedSlots, maxSlotsPerDay);
+        const occupiedSlots = occupiedByBillboardDate.get(billboardDateKey) || new Set();
+        const slotNumber = findFirstAvailableSlot(occupiedSlots, prepared.maxSlotsPerDay);
 
         if (slotNumber == null) {
-          logger.slot(`Skipped: ${billboardId} is full on ${dateKey} (${maxSlotsPerDay}/${maxSlotsPerDay})`);
+          logger.slot(`Skipped: ${prepared.billboardId} is full on ${dateKey} (${prepared.maxSlotsPerDay}/${prepared.maxSlotsPerDay})`);
           continue;
         }
 
         const { start, end } = getUTCDateBounds(dateKey);
-
-        slotsToCreate.push({
-          campaignId: String(campaign.id),
-          billboardId,
-          assetUrl,
-          startDate: start,
-          endDate: end,
-          duration,
+        const slotItem = buildSlotItem({
+          id: `${campaign.id}_${prepared.billboardId}_${dateKey}_${slotNumber}`,
+          assetUrl: prepared.assetUrl,
+          duration: prepared.duration,
           slotNumber,
-          screenId: screenId ? String(screenId) : null
+          createdFor,
+          startDate: start,
+          endDate: end
         });
 
+        slotsByBillboard[prepared.billboardId].push(slotItem);
         occupiedSlots.add(slotNumber);
-        occupiedByDate.set(dateKey, occupiedSlots);
-        campaignDates.add(dateKey);
-      }
-
-      if (slotsToCreate.length === 0) {
-        logger.info(`No new slots generated for billboard ${billboardId} in campaign ${campaign.id}`);
-        continue;
-      }
-
-      await prisma.generatedSlot.createMany({
-        data: slotsToCreate
-      });
-
-      for (const slot of slotsToCreate) {
-        logger.slot(`Slot #${slot.slotNumber} for ${slot.billboardId} on ${getUTCDateKey(slot.startDate)}`);
+        occupiedByBillboardDate.set(billboardDateKey, occupiedSlots);
+        campaignBillboardDates.add(billboardDateKey);
+        logger.slot(`Slot #${slotNumber} for ${prepared.billboardId} on ${dateKey}`);
       }
     }
 
-    logger.info('Slot generation completed for campaign:', campaign.id);
+    const existingRecord = await prisma.generatedSlot.findUnique({
+      where: { campaignId: String(campaign.id) }
+    });
+
+    const mergedSlots = {
+      ...(existingRecord?.slots && typeof existingRecord.slots === 'object' ? existingRecord.slots : {}),
+      ...slotsByBillboard
+    };
+
+    await prisma.generatedSlot.upsert({
+      where: { campaignId: String(campaign.id) },
+      update: {
+        billboardIds: [...new Set(billboardIds)],
+        screenId: [...new Set(screenIds)],
+        slots: mergedSlots
+      },
+      create: {
+        campaignId: String(campaign.id),
+        billboardIds: [...new Set(billboardIds)],
+        screenId: [...new Set(screenIds)],
+        slots: mergedSlots
+      }
+    });
+
+    logger.info('Grouped slot generation completed for campaign:', campaign.id);
   } catch (error) {
     logger.error('Error in generateSlots function:', error);
     throw error;

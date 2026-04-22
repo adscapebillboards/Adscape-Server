@@ -2,6 +2,7 @@ const prisma = require('../db/db');
 const logger = require('../config/logger');
 const { recomputeAndUpsertForRange, ensureDefaultAvailabilityForTwoMonths, updateBillboardSlotAvailabilityJSON } = require('./availabilityController');
 const { generateSlots: sharedGenerateSlots } = require('../utils/slotGenerator');
+const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 // Helper to convert various duration formats to seconds
 function toSeconds(input) {
   if (!input) return 10;
@@ -309,17 +310,37 @@ const attachCampaignFile = async (req, res) => {
     // Update existing slots that might be using the default logo
     const defaultLogo = "https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png";
 
-    // Update GeneratedSlots
-    const updatedGenerated = await prisma.generatedSlot.updateMany({
-      where: {
-        campaignId: campaignId,
-        billboardId: String(billboardId),
-        assetUrl: defaultLogo
-      },
-      data: {
-        assetUrl: fileUrl
-      }
+    // Update grouped GeneratedSlot JSON
+    let updatedGeneratedCount = 0;
+    const generatedSlotRecord = await prisma.generatedSlot.findUnique({
+      where: { campaignId: String(campaignId) }
     });
+
+    if (generatedSlotRecord?.slots && typeof generatedSlotRecord.slots === 'object') {
+      const groupedSlots = { ...generatedSlotRecord.slots };
+      const billboardSlots = Array.isArray(groupedSlots[String(billboardId)])
+        ? groupedSlots[String(billboardId)]
+        : [];
+
+      groupedSlots[String(billboardId)] = billboardSlots.map(slot => {
+        if ((slot.assestUrl || slot.assetUrl) !== defaultLogo) {
+          return slot;
+        }
+
+        updatedGeneratedCount += 1;
+        return {
+          ...slot,
+          assestUrl: fileUrl
+        };
+      });
+
+      if (updatedGeneratedCount > 0) {
+        await prisma.generatedSlot.update({
+          where: { campaignId: String(campaignId) },
+          data: { slots: groupedSlots }
+        });
+      }
+    }
 
     // Update DailySlots
     const updatedDaily = await prisma.dailySlot.updateMany({
@@ -334,7 +355,7 @@ const attachCampaignFile = async (req, res) => {
       }
     });
 
-    logger.info(`✅ Attached file to campaign ${campaignId}, billboard ${billboardId}. Updated ${updatedGenerated.count} GeneratedSlots and ${updatedDaily.count} DailySlots.`);
+    logger.info(`✅ Attached file to campaign ${campaignId}, billboard ${billboardId}. Updated ${updatedGeneratedCount} GeneratedSlots and ${updatedDaily.count} DailySlots.`);
     res.json({ success: true, message: 'File attached successfully', campaignId, billboardId, fileUrl });
   } catch (err) {
     logger.error('Error attaching campaign file:', err);
@@ -1257,100 +1278,11 @@ const updateBillboardStatus = async (req, res) => {
 // Generate slots for a specific billboard
 const generateSlotsForBillboard = async (campaignId, billboard) => {
   try {
-    const billboardId = billboard.id;
-    const assetUrl = billboard.files?.[0];
-    let screen_id = billboard.screen_id || billboard.screenId;
-    if (!screen_id && billboardId) {
-      const dbBillboard = await prisma.billboard.findUnique({ where: { id: billboardId }, select: { screen_id: true } });
-      screen_id = dbBillboard?.screen_id || null;
-    }
-    const { startDate, endDate } = billboard.bookingDetails;
-    const durationSeconds = toSeconds(billboard.adDuration || billboard.bookingDetails?.duration || 10);
-
-    logger.info(`🎬 Generating slots for billboard ${billboardId}:`, {
-      assetUrl,
-      screen_id,
-      startDate,
-      endDate,
-      files: billboard.files
+    await sharedGenerateSlots({
+      id: String(campaignId),
+      billboards: [billboard]
     });
-
-    if (!startDate || !endDate || !assetUrl) {
-      logger.warn(`⚠️ Missing data for billboard ${billboardId}:`, {
-        hasStartDate: !!startDate,
-        hasEndDate: !!endDate,
-        hasAssetUrl: !!assetUrl
-      });
-      return;
-    }
-
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-
-    // DEV: always ensure at least one slot for TODAY for quick testing
-    try {
-      const today = new Date();
-      const { start: todayStart, end: todayEnd } = getDayRange(today);
-      const existsToday = await prisma.generatedSlot.findFirst({
-        where: {
-          billboardId,
-          campaignId: campaignId,
-          startDate: { gte: todayStart, lte: todayEnd }
-        },
-        select: { id: true }
-      });
-      if (!existsToday) {
-        await prisma.generatedSlot.create({
-          data: {
-            campaignId,
-            billboardId,
-            assetUrl,
-            startDate: todayStart,
-            endDate: todayEnd,
-            duration: durationSeconds,
-            slotNumber: 1,
-            screenId: screen_id
-          }
-        });
-        logger.slot(`✅ DEV: ensured today slot for billboard ${billboardId}`);
-      }
-    } catch (e) {
-      logger.warn('DEV today-slot ensure failed:', e.message);
-    }
-
-    // Generate exactly one booked slot per day in the booking period
-    for (let current = new Date(start); current <= end; current.setDate(current.getDate() + 1)) {
-      const { start: dayStart, end: dayEnd } = getDayRange(current);
-
-      const existing = await prisma.generatedSlot.findFirst({
-        where: {
-          billboardId,
-          campaignId: campaignId,
-          startDate: { gte: dayStart, lte: dayEnd }
-        },
-        select: { slotNumber: true }
-      });
-
-      if (!existing) {
-        await prisma.generatedSlot.create({
-          data: {
-            campaignId,
-            billboardId,
-            assetUrl,
-            startDate: dayStart,
-            endDate: dayEnd,
-            duration: 1,
-            slotNumber: 1,
-            screenId: screen_id
-          }
-        });
-        logger.slot(`✅ Created 1 slot for ${billboardId} on ${dayStart.toISOString().slice(0, 10)}`);
-      } else {
-        logger.slot(`⛔ Slot already exists for ${billboardId} on ${dayStart.toISOString().slice(0, 10)}`);
-      }
-    }
-
-    logger.info(`🎉 Slot generation completed for billboard ${billboardId}`);
+    logger.info(`🎉 Slot generation completed for billboard ${billboard.id}`);
   } catch (error) {
     logger.error(`❌ Error generating slots for billboard ${billboard.id}:`, error);
     throw error;
@@ -1365,9 +1297,13 @@ const generateSlotsForCampaign = async (campaignId, billboards) => {
     const approvedBillboards = billboards.filter(b => b.status?.toUpperCase() === 'APPROVED');
     logger.info(`📋 Found ${approvedBillboards.length} approved billboards`);
 
+    await sharedGenerateSlots({
+      id: String(campaignId),
+      billboards: approvedBillboards
+    });
+
     for (const billboard of approvedBillboards) {
       try {
-        await generateSlotsForBillboard(campaignId, billboard);
         // Update the slotAvailability JSON field after generating slots
         await updateBillboardSlotAvailabilityJSON(String(billboard.id));
       } catch (error) {
@@ -1451,14 +1387,13 @@ const getCampaignWithBillboardStatuses = async (req, res) => {
     }
 
     // Get slot counts for each billboard
+    const generatedSlotRecord = await prisma.generatedSlot.findUnique({
+      where: { campaignId: String(id) }
+    });
+    const flatGeneratedSlots = flattenGeneratedSlotRecords(generatedSlotRecord ? [generatedSlotRecord] : []);
     const billboardsWithSlotCounts = await Promise.all(
       billboards.map(async (billboard) => {
-        const slotCount = await prisma.generatedSlot.count({
-          where: {
-            billboardId: billboard.id,
-            campaignId: id
-          }
-        });
+        const slotCount = flatGeneratedSlots.filter(slot => String(slot.billboardId) === String(billboard.id)).length;
 
         return {
           ...billboard,
@@ -1658,13 +1593,30 @@ const deleteBillboardFromCampaign = async (req, res) => {
     // Update campaign in transaction
     await prisma.$transaction(async (tx) => {
       // Delete generated slots for this specific billboard
-      const deletedSlots = await tx.generatedSlot.deleteMany({
-        where: {
-          campaignId: campaignId,
-          billboardId: billboardId
-        }
+      const generatedSlot = await tx.generatedSlot.findUnique({
+        where: { campaignId: String(campaignId) }
       });
-      logger.info(`Deleted ${deletedSlots.count} generated slots for billboard ${billboardId}`);
+      let deletedSlotCount = 0;
+      if (generatedSlot?.slots && typeof generatedSlot.slots === 'object') {
+        const groupedSlots = { ...generatedSlot.slots };
+        deletedSlotCount = Array.isArray(groupedSlots[String(billboardId)])
+          ? groupedSlots[String(billboardId)].length
+          : 0;
+        delete groupedSlots[String(billboardId)];
+
+        if (Object.keys(groupedSlots).length === 0) {
+          await tx.generatedSlot.delete({ where: { campaignId: String(campaignId) } });
+        } else {
+          await tx.generatedSlot.update({
+            where: { campaignId: String(campaignId) },
+            data: {
+              slots: groupedSlots,
+              billboardIds: Object.keys(groupedSlots)
+            }
+          });
+        }
+      }
+      logger.info(`Deleted ${deletedSlotCount} generated slots for billboard ${billboardId}`);
 
       // Delete asset play logs for this specific billboard (if assetUrl matches)
       if (billboardToDelete.files && billboardToDelete.files.length > 0) {

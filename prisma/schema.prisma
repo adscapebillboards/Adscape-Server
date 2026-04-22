@@ -133,17 +133,15 @@ model Campaign {
 }
 
 model GeneratedSlot {
-  id          String    @id @default(cuid())
-  campaignId  String    @map("campaign_id")
-  billboardId String    @map("billboard_id")
-  assetUrl    String    @map("asset_url")
-  startDate   DateTime  @map("start_date") @db.Timestamp(6)
-  endDate     DateTime  @map("end_date") @db.Timestamp(6)
-  duration    Int
-  updated_at  DateTime? @default(now()) @db.Timestamp(6)
-  slotNumber  Int?      @map("slot_number")
-  screenId    String?   @map("screen_id")
+  id           String    @id @default(cuid())
+  campaignId   String    @map("campaign_id")
+  billboardIds String[]  @map("billboard_ids")
+  screenId     String[]  @map("screen_id")
+  createdDate  DateTime? @default(now()) @map("created_date") @db.Timestamp(6)
+  updatedDate  DateTime? @default(now()) @updatedAt @map("updated_date") @db.Timestamp(6)
+  slots        Json
 
+  @@unique([campaignId], map: "generated_slots_campaign_id_key")
   @@map("generated_slots")
 }
 

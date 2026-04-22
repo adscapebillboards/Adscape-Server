@@ -3,6 +3,7 @@ const router = express.Router();
 const prisma = require('../db/db');
 const logger = require('../config/logger');
 const { generateSlots } = require('../utils/slotGenerator');
+const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 const {
   createCampaign,
   getCampaignsByUser,
@@ -75,41 +76,26 @@ router.post('/campaigns/:id/generate-slots-today', async (req, res) => {
     }
 
     const defaultAsset = 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
-    let totalCreated = 0;
+    const todayBillboards = billboards.map(bb => ({
+      ...bb,
+      files: bb.files?.length ? bb.files : [bb.creative || defaultAsset],
+      bookingDetails: {
+        ...(bb.bookingDetails || {}),
+        startDate: todayIST,
+        endDate: todayIST
+      },
+      startDate: todayIST,
+      endDate: todayIST
+    }));
 
-    for (const bb of billboards) {
-      const billboardId = String(bb.id);
-      const assetUrl = bb.files?.[0] || bb.creative || defaultAsset;
-      const screenId = bb.screen_id || bb.screenId || null;
-
-      // Skip if slots already exist today for this billboard in this campaign
-      const existing = await prisma.generatedSlot.count({
-        where: {
-          campaignId: id,
-          billboardId,
-          startDate: { gte: new Date(`${todayIST}T00:00:00Z`), lte: new Date(`${todayIST}T23:59:59Z`) }
-        }
-      });
-      if (existing > 0) {
-        logger.info(`[DEV] Slots already exist for billboard ${billboardId} on ${todayIST} — skipping`);
-        continue;
-      }
-
-      await prisma.generatedSlot.create({
-        data: {
-          campaignId: String(id),
-          billboardId,
-          assetUrl,
-          startDate: new Date(`${todayIST}T00:00:00.000Z`),
-          endDate: new Date(`${todayIST}T23:59:59.000Z`),
-          duration: 15,
-          slotNumber: 1,
-          screenId: screenId ? String(screenId) : null
-        }
-      });
-      totalCreated++;
-      logger.info(`[DEV] Created slot for billboard ${billboardId} on ${todayIST}`);
-    }
+    await generateSlots(
+      { ...campaign, billboards: todayBillboards },
+      { createdFor: 'Development' }
+    );
+    const generated = await prisma.generatedSlot.findUnique({ where: { campaignId: String(id) } });
+    const totalCreated = Object.values(generated?.slots || {}).reduce((sum, slots) => (
+      sum + (Array.isArray(slots) ? slots.length : 0)
+    ), 0);
 
     res.json({
       success: true,
@@ -148,18 +134,16 @@ router.get('/assets/:screenId', async (req, res) => {
     logger.info(`Request URL: ${req.originalUrl}`);
     logger.info('========================================');
 
-    // Get slots for the target date
-    const slots = await prisma.generatedSlot.findMany({
+    // Get grouped slots for the target date and flatten them for the player response
+    const slotRecords = await prisma.generatedSlot.findMany({
       where: {
-        screenId: screenId,
-        startDate: {
-          gte: new Date(`${targetDate}T00:00:00Z`),
-          lt: new Date(`${targetDate}T23:59:59Z`)
-        }
-      },
-      orderBy: {
-        slotNumber: 'asc'
+        screenId: { has: String(screenId) }
       }
+    });
+    const slots = flattenGeneratedSlotRecords(slotRecords, {
+      screenId,
+      startGte: new Date(`${targetDate}T00:00:00Z`),
+      startLt: new Date(`${targetDate}T23:59:59Z`)
     });
 
     logger.info(`Database query completed for screen ${screenId}:`);
@@ -180,8 +164,8 @@ router.get('/assets/:screenId', async (req, res) => {
         // Enhanced metadata
         file_type: getFileType(slot.assetUrl),
         file_size: null, // Will be populated if available
-        created_at: slot.createdAt?.toISOString(),
-        updated_at: slot.updatedAt?.toISOString()
+        created_at: slot.record.createdDate?.toISOString(),
+        updated_at: slot.record.updatedDate?.toISOString()
       };
 
       // Add expiration information if requested
@@ -449,9 +433,10 @@ router.post('/test-generate-slots/:campaignId', async (req, res) => {
     await generateSlots(campaign);
 
     // Check how many slots were created
-    const slotCount = await prisma.generatedSlot.count({
-      where: { campaignId: campaignId }
+    const generatedSlotRecord = await prisma.generatedSlot.findUnique({
+      where: { campaignId: String(campaignId) }
     });
+    const slotCount = flattenGeneratedSlotRecords(generatedSlotRecord ? [generatedSlotRecord] : []).length;
 
     logger.info(`Slots generated successfully. Total slots: ${slotCount}`);
     res.json({
@@ -471,13 +456,12 @@ router.get('/slots/:campaignId', async (req, res) => {
     const { campaignId } = req.params;
 
     const slots = await prisma.generatedSlot.findMany({
-      where: { campaignId },
-      orderBy: { startDate: 'asc' }
+      where: { campaignId }
     });
 
     res.json({
       campaignId,
-      totalSlots: slots.length,
+      totalSlots: flattenGeneratedSlotRecords(slots).length,
       slots
     });
   } catch (err) {
