@@ -295,7 +295,12 @@ const attachCampaignFile = async (req, res) => {
       try { assets = JSON.parse(assets); } catch { assets = []; }
     }
     if (!Array.isArray(assets)) assets = [];
-    if (!assets.includes(fileUrl)) {
+    const hasAsset = assets.some((asset) => {
+      if (!asset) return false;
+      if (typeof asset === 'string') return asset === fileUrl;
+      return String(asset.url || asset.secure_url || '') === String(fileUrl);
+    });
+    if (!hasAsset) {
       assets.push({ billboardId: String(billboardId), url: fileUrl });
     }
 
@@ -328,11 +333,12 @@ const attachCampaignFile = async (req, res) => {
         }
 
         updatedGeneratedCount += 1;
-        return {
-          ...slot,
-          assestUrl: fileUrl
-        };
-      });
+         return {
+           ...slot,
+           assestUrl: fileUrl,
+           assetUrl: fileUrl
+         };
+       });
 
       if (updatedGeneratedCount > 0) {
         await prisma.generatedSlot.update({

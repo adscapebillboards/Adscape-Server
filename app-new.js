@@ -18,6 +18,7 @@ const businessRoutes = require('./routes/business');
 const billboardManagementRoutes = require('./routes/billboardManagement');
 const campaignStatusRoutes = require('./routes/campaignStatus');
 const assetCleanupRoutes = require('./routes/assetCleanup');
+const uploadRoutes = require('./routes/uploads');
 
 // Import schedulers
 const campaignStatusScheduler = require('./utils/campaignStatusScheduler');
@@ -308,6 +309,9 @@ app.use('/api', campaignStatusRoutes);
 
 // Asset Cleanup routes
 app.use('/api/asset-cleanup', assetCleanupRoutes);
+
+// Upload routes
+app.use('/api/uploads', uploadRoutes);
 
 // Slot and Asset routes
 app.use('/api', slotRoutes);
