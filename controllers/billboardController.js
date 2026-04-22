@@ -1,5 +1,6 @@
 const prisma = require('./../db/db');
 const logger = require('../config/logger');
+const { isSuperAdminRole } = require('../utils/roles');
 const EmailService = require('../services/emailService');
 const pushNotificationService = require('../services/pushNotificationService');
 
@@ -87,7 +88,7 @@ exports.getAllBillboards = async (req, res) => {
 
     // Role-based filtering
     // Filter by userId (which stores the billboard owner's email in the user_id column)
-    if (user.role === 'superadmin') {
+    if (isSuperAdminRole(user.role)) {
       // Superadmin can see all billboards (including pending ones)
       whereClause = {};
     } else {
@@ -173,7 +174,7 @@ exports.getApprovedBillboards = async (req, res) => {
     // If user is authenticated, apply role-based filtering
     if (req.user) {
       const user = req.user;
-      if (user.role === 'superadmin') {
+      if (isSuperAdminRole(user.role)) {
         whereClause = {
           status: 'APPROVED',
           available: true
@@ -400,7 +401,7 @@ exports.approveBillboard = async (req, res) => {
     const user = req.user;
 
     // Check if user is superadmin
-    if (user.role !== 'superadmin') {
+    if (!isSuperAdminRole(user.role)) {
       return res.status(403).json({ error: 'Access denied. Only superadmin can approve billboards.' });
     }
 
@@ -495,7 +496,7 @@ exports.rejectBillboard = async (req, res) => {
     const user = req.user;
 
     // Check if user is superadmin
-    if (user.role !== 'superadmin') {
+    if (!isSuperAdminRole(user.role)) {
       return res.status(403).json({ error: 'Access denied. Only superadmin can reject billboards.' });
     }
 
@@ -596,7 +597,7 @@ exports.getPendingBillboards = async (req, res) => {
     const user = req.user;
 
     // Check if user is superadmin
-    if (user.role !== 'superadmin') {
+    if (!isSuperAdminRole(user.role)) {
       return res.status(403).json({ error: 'Access denied. Only superadmin can view pending billboards.' });
     }
 
@@ -625,7 +626,7 @@ exports.getUserBillboards = async (req, res) => {
     let whereClause = {};
 
     // Role-based filtering
-    if (user.role === 'superadmin') {
+    if (isSuperAdminRole(user.role)) {
       // Superadmin can see all billboards
       whereClause = {};
     } else {
@@ -665,7 +666,7 @@ exports.resubmitBillboard = async (req, res) => {
     }
 
     // Check if user is superadmin or the billboard owner
-    if (user.role !== 'superadmin' && billboard.userId !== user.email) {
+    if (!isSuperAdminRole(user.role) && billboard.userId !== user.email) {
       return res.status(403).json({ error: 'Access denied. Only superadmin or billboard owner can resubmit billboards.' });
     }
 

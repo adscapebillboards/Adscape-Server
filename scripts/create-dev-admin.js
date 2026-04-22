@@ -5,39 +5,69 @@ const prisma = new PrismaClient();
 
 async function createDevAdmin() {
   try {
-    const email = 'dev@adscape.com';
+    const email = 'srinnivassh@gmail.com';
     const password = 'dev123456';
-    const name = 'Dev Admin';
+    const name = 'Developer Admin';
     const phone = '1234567890';
+    const developerPermissions = {
+      users: true,
+      publishers: true,
+      billboards: true,
+      bookings: true,
+      assets: true,
+      actions: true,
+      partners: true,
+      systemSettings: true,
+      developerMode: true,
+      developerSettings: true,
+      system: {
+        developerMode: true,
+        diagnostics: true,
+        maintenance: true
+      }
+    };
 
-    // Check if dev admin already exists
     const existingAdmin = await prisma.publisher.findUnique({
       where: { email }
     });
 
     if (existingAdmin) {
-      console.log('⚠️  Dev admin already exists!');
-      console.log('Email:', existingAdmin.email);
-      console.log('Role:', existingAdmin.role);
-      console.log('Status:', existingAdmin.status);
-      console.log('\nTo reset password, delete the account first or use a different email.');
+      const updatedAdmin = await prisma.publisher.update({
+        where: { email },
+        data: {
+          name: existingAdmin.name || name,
+          phone: existingAdmin.phone || phone,
+          role: 'developer',
+          status: 'active',
+          permissions: {
+            ...(existingAdmin.permissions && typeof existingAdmin.permissions === 'object' ? existingAdmin.permissions : {}),
+            ...developerPermissions
+          }
+        }
+      });
+
+      console.log('✅ Developer admin updated successfully!');
+      console.log('Email:', updatedAdmin.email);
+      console.log('Role:', updatedAdmin.role);
+      console.log('Status:', updatedAdmin.status);
       return;
     }
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create dev admin as a publisher with superadmin role
+    // Create developer admin as a publisher with superadmin-equivalent access.
     const devAdmin = await prisma.publisher.create({
       data: {
         name,
         email,
         phone,
         password: hashedPassword,
-        role: 'superadmin',
+        role: 'developer',
         status: 'active',
         joinDate: new Date(),
-        location: 'Development'
+        location: 'Development',
+        permissions: developerPermissions
       }
     });
 

@@ -1,4 +1,5 @@
 const prisma = require('../db/db');
+const { SUPERADMIN_ROLES } = require('./roles');
 
 function normalizePermissions(permissions) {
   if (permissions && typeof permissions === 'object' && !Array.isArray(permissions)) {
@@ -18,7 +19,7 @@ function readDeveloperMode(permissions) {
 async function getDeveloperMode() {
   const superadmin = await prisma.publisher.findFirst({
     where: {
-      role: 'superadmin',
+      role: { in: SUPERADMIN_ROLES },
       status: 'active'
     },
     orderBy: {
@@ -35,7 +36,7 @@ async function getDeveloperMode() {
 async function setDeveloperMode(enabled) {
   const superadmins = await prisma.publisher.findMany({
     where: {
-      role: 'superadmin'
+      role: { in: SUPERADMIN_ROLES }
     },
     select: {
       id: true,

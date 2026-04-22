@@ -1,4 +1,5 @@
 const logger = require('../config/logger');
+const { expandAllowedRoles, normalizeRole } = require('../utils/roles');
 
 const roleAuth = (allowedRoles) => {
   return (req, res, next) => {
@@ -16,15 +17,18 @@ const roleAuth = (allowedRoles) => {
       }
 
       // Check if user's role is in allowed roles
-      if (!allowedRoles.includes(req.user.role)) {
+      const expandedAllowedRoles = expandAllowedRoles(allowedRoles);
+      const userRole = normalizeRole(req.user.role);
+
+      if (!expandedAllowedRoles.includes(userRole)) {
         logger.warn('User role not authorized', { 
           userId: req.user.id, 
           userRole: req.user.role, 
-          allowedRoles 
+          allowedRoles: expandedAllowedRoles 
         });
         return res.status(403).json({ 
           error: 'Insufficient permissions',
-          required: allowedRoles,
+          required: expandedAllowedRoles,
           current: req.user.role
         });
       }

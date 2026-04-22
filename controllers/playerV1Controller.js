@@ -23,11 +23,6 @@ exports.register = async (req, res) => {
             return res.status(400).json({ error: 'screenId and deviceId required' });
         }
 
-        let screen = await prisma.screen.findUnique({ where: { id: String(screenId) } });
-        if (!screen) {
-            screen = await prisma.screen.create({ data: { id: String(screenId) } });
-        }
-
         const player = await prisma.adscapePlayer.upsert({
             where: { screenId: String(screenId) },
             update: {

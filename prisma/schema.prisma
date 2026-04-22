@@ -356,12 +356,6 @@ model slot_availability {
 
 
 
-model Screen {
-  id        String   @id @db.VarChar(64)
-  createdAt DateTime @default(now())
-  bmiData   BMI[]
-}
-
 model AdscapePlayer {
   id             String   @id @db.Uuid @default(uuid())
   screenId       String   @unique @db.VarChar(64)
@@ -381,34 +375,6 @@ model AdscapePlayer {
   updatedAt      DateTime @updatedAt
 }
 
-model UserBMI {
-  id        String   @id @db.Uuid @default(uuid())
-  name      String   @db.VarChar(255)
-  mobile    String   @db.VarChar(20)
-  createdAt DateTime @default(now())
-  bmiData   BMI[]
-}
-
-model BMI {
-  id        String   @id @db.Uuid
-  screenId  String
-  screen    Screen   @relation(fields: [screenId], references: [id], onDelete: Cascade)
-  userId    String?  @db.Uuid
-  user      UserBMI?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  heightCm  Float
-  weightKg  Float
-  bmi       Float
-  category  String
-  timestamp DateTime @default(now())
-  deviceId  String?  @db.VarChar(255)
-  appVersion String? @db.VarChar(10)
-  location  String?  @db.VarChar(255)
-  fortune   String?  @db.Text
-
-  @@index([screenId])
-  @@index([userId])
-  @@index([userId, timestamp])
-}
 model PushSubscription { 
   id          Int      @id @default(autoincrement()) 
   endpoint    String   @unique 
@@ -477,4 +443,3 @@ model PlaybackStat {
   @@index([screenId, assetId])
   @@map("playback_stats_logs")
 }
-

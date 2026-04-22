@@ -7,6 +7,7 @@ const bcrypt = require('bcrypt');
 const streamifier = require('streamifier');
 const cloudinary = require('../config/cloudinary');
 const prisma = require('../db/db');
+const { isSuperAdminRole } = require('../utils/roles');
 const auth = require('../middleware/auth');
 const roleAuth = require('../middleware/roleAuth');
 const { createPublisherMetricEntry } = require('../controllers/publisherMetricController');
@@ -185,7 +186,7 @@ router.post('/', upload.fields([
 router.get('/', auth, async (req, res) => {
   try {
     // Check if user is superadmin or publisher
-    if (req.user?.role !== 'superadmin' && req.user?.role !== 'publisher') {
+    if (!isSuperAdminRole(req.user?.role) && req.user?.role !== 'publisher') {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -224,7 +225,7 @@ router.get('/:id', auth, async (req, res) => {
 router.put('/:id/approve', auth, async (req, res) => {
   try {
     // Check if user is superadmin (only superadmin can approve registrations)
-    if (req.user?.role !== 'superadmin') {
+    if (!isSuperAdminRole(req.user?.role)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -371,7 +372,7 @@ router.put('/:id/approve', auth, async (req, res) => {
 router.put('/:id/reject', auth, async (req, res) => {
   try {
     // Check if user is superadmin
-    if (req.user?.role !== 'superadmin') {
+    if (!isSuperAdminRole(req.user?.role)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 

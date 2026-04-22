@@ -76,8 +76,8 @@ exports.createSuperAdmin = async (req, res) => {
   }
 
   // Validate role (only superadmin can create managers/support)
-  if (role === 'superadmin') {
-    return res.status(403).json({ error: 'Cannot create superadmin accounts' });
+    if (role === 'superadmin' || role === 'developer') {
+      return res.status(403).json({ error: 'Cannot create superadmin or developer accounts' });
   }
 
   try {
@@ -143,8 +143,8 @@ exports.updateSuperAdmin = async (req, res) => {
     }
 
     // Prevent role change to superadmin
-    if (role === 'superadmin') {
-      return res.status(403).json({ error: 'Cannot change role to superadmin' });
+    if (role === 'superadmin' || role === 'developer') {
+      return res.status(403).json({ error: 'Cannot change role to superadmin or developer' });
     }
 
     // Update superadmin
@@ -241,8 +241,8 @@ exports.deleteSuperAdmin = async (req, res) => {
     }
 
     // Prevent deletion of superadmin role
-    if (superadmin.role === 'superadmin') {
-      return res.status(403).json({ error: 'Cannot delete superadmin accounts' });
+    if (superadmin.role === 'superadmin' || superadmin.role === 'developer') {
+      return res.status(403).json({ error: 'Cannot delete superadmin or developer accounts' });
     }
 
     // Soft delete by setting status to inactive

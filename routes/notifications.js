@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../db/db');
+const { isSuperAdminRole } = require('../utils/roles');
 const auth = require('../middleware/auth');
 
 // List notifications for current user; superadmin can see all or filter by unread
@@ -11,7 +12,7 @@ router.get('/', auth, async (req, res) => {
 
     const where = {};
 
-    if (user.role !== 'superadmin') {
+    if (!isSuperAdminRole(user.role)) {
       where.OR = [
         { recipient_email: user.email },
         { recipient_role: user.role }
@@ -54,7 +55,7 @@ router.post('/:id/read', auth, async (req, res) => {
     const user = req.user;
     const where = { id };
 
-    if (user.role !== 'superadmin') {
+    if (!isSuperAdminRole(user.role)) {
       where.OR = [
         { recipient_email: user.email },
         { recipient_role: user.role }

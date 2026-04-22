@@ -31,9 +31,9 @@ router.get('/profile', auth, superadminController.getCurrentUserProfile);
 // Update current user profile
 router.put('/profile', auth, superadminController.updateCurrentUserProfile);
 
-// Global developer mode toggle
-router.get('/superadmin-settings/developer-mode', auth, roleAuth(['superadmin']), superadminController.getDeveloperMode);
-router.put('/superadmin-settings/developer-mode', auth, roleAuth(['superadmin']), superadminController.updateDeveloperMode);
+// Global developer mode toggle (developer role only)
+router.get('/superadmin-settings/developer-mode', auth, roleAuth(['developer']), superadminController.getDeveloperMode);
+router.put('/superadmin-settings/developer-mode', auth, roleAuth(['developer']), superadminController.updateDeveloperMode);
 
 module.exports = router;
 

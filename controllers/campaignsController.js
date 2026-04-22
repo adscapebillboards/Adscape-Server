@@ -1,5 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { isSuperAdminRole } = require('../utils/roles');
 const { generateSlots: sharedGenerateSlots } = require('../utils/slotGenerator');
 
 const createCampaign = async (req, res) => {
@@ -85,7 +86,7 @@ const getUserCampaigns = async (req, res) => {
     let whereClause = {};
 
     // Role-based filtering
-    if (user.role === 'superadmin') {
+    if (isSuperAdminRole(user.role)) {
       // Superadmin can see all campaigns
       whereClause = {};
     } else {

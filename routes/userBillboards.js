@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../db/db');
+const { isSuperAdminRole } = require('../utils/roles');
 const logger = require('../config/logger');
 const auth = require('../middleware/auth');
 const roleAuth = require('../middleware/roleAuth');
@@ -17,7 +18,7 @@ router.get('/userbillboards', auth, async (req, res) => {
     let whereClause = {};
     
     // Role-based filtering
-    if (user.role === 'superadmin') {
+    if (isSuperAdminRole(user.role)) {
       // Superadmin can see all billboards
       whereClause = {};
     } else {
