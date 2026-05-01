@@ -26,6 +26,7 @@ const cloudinary = require('../config/cloudinary');
 const { v4: uuidv4 } = require('uuid');
 const EmailService = require('../services/emailService');
 const pushNotificationService = require('../services/pushNotificationService');
+const { sendAdminNewCampaignWhatsapp } = require('../services/whatsappService');
 // const { generateSlots } = require('../utils/slotGenerator');
 
 // Multer is kept for any legacy use-cases but createCampaign no longer uses it
@@ -229,6 +230,9 @@ const createCampaign = async (req, res) => {
       `Campaign "${campaignName || 'Untitled'}" by ${userName} is waiting for approval.`,
       '/#/bookings'
     ).catch((e) => logger.warn('Push notify failed after campaign create:', e?.message));
+
+    // WhatsApp notification for super admin
+    sendAdminNewCampaignWhatsapp(campaignName, userName);
 
     // Note: Emails will be sent after campaign name is updated
     // This prevents sending emails with "Auto Campaign" name
