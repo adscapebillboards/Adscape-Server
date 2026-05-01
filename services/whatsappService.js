@@ -1,4 +1,5 @@
 const logger = require('../config/logger');
+const axios = require('axios');
 
 const sendAdminNewCampaignWhatsapp = async (campaignName, userName) => {
   const webhookUrl = "https://api.convobox.in/api/templates/webhooks/2496074127455715/1959971401556479";
@@ -13,22 +14,16 @@ const sendAdminNewCampaignWhatsapp = async (campaignName, userName) => {
       }
     };
 
-    const response = await fetch(webhookUrl, {
-      method: "POST",
+    const response = await axios.post(webhookUrl, payload, {
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify(payload)
+      timeout: 5000 // Add a 5 second timeout so it doesn't hang indefinitely
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error(`WhatsApp notification failed: ${response.status} ${response.statusText}`, errorText);
-    } else {
-      logger.info(`WhatsApp notification sent for new campaign: ${campaignName}`);
-    }
+    logger.info(`WhatsApp notification sent for new campaign: ${campaignName}`);
   } catch (error) {
-    logger.error("Error sending WhatsApp notification:", error);
+    logger.error("Error sending WhatsApp notification:", error.response?.data || error.message);
   }
 };
 
