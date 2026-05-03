@@ -3,7 +3,7 @@ const axios = require('axios');
 
 const sendAdminNewCampaignWhatsapp = async (campaignName, userName) => {
   const webhookUrl = "https://api.convobox.in/api/templates/webhooks/2496074127455715/1959971401556479";
-  const superAdminNo = "9443932288";
+  const superAdminNo = "9994770276";
 
   try {
     const payload = {
