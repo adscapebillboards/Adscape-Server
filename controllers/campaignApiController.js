@@ -179,20 +179,19 @@ const createCampaign = async (req, res) => {
     }
 
     // After create, initialize and update availability cache for involved billboards
-    try {
-      await Promise.all(enrichedBillboards.map(async (b) => {
-        try {
-          await ensureDefaultAvailabilityForTwoMonths(String(b.id));
-          await recomputeAndUpsertForRange(String(b.id), b.bookingDetails?.startDate || startDate, b.bookingDetails?.endDate || endDate);
-          // Update the slotAvailability JSON field on the billboard (stores 2 months in one JSON)
-          await updateBillboardSlotAvailabilityJSON(String(b.id));
-        } catch (innerError) {
-          logger.error(`Failed to update availability for billboard ${b.id}:`, innerError.message);
-        }
-      }));
-    } catch (e) {
+    // Run asynchronously to prevent API timeout
+    Promise.all(enrichedBillboards.map(async (b) => {
+      try {
+        await ensureDefaultAvailabilityForTwoMonths(String(b.id));
+        await recomputeAndUpsertForRange(String(b.id), b.bookingDetails?.startDate || startDate, b.bookingDetails?.endDate || endDate);
+        // Update the slotAvailability JSON field on the billboard (stores 2 months in one JSON)
+        await updateBillboardSlotAvailabilityJSON(String(b.id));
+      } catch (innerError) {
+        logger.error(`Failed to update availability for billboard ${b.id}:`, innerError.message);
+      }
+    })).catch(e => {
       logger.warn('Availability upsert after campaign creation failed:', e.message);
-    }
+    });
 
     // Notifications: to superadmin and campaign owner
     // Only create notifications if database is available
@@ -733,6 +732,27 @@ const updateCampaignStatus = async (req, res) => {
     });
 
     logger.campaign('Campaign status updated', `Campaign ID: ${id}, Status: ${newStatus} (requested: ${status})`);
+
+    // Recompute slot availability asynchronously for all affected billboards
+    // so the slot_availability table reflects the new campaign status immediately.
+    try {
+      let billboardsForSync = currentCampaign.billboards;
+      if (typeof billboardsForSync === 'string') {
+        try { billboardsForSync = JSON.parse(billboardsForSync); } catch { billboardsForSync = []; }
+      }
+      if (Array.isArray(billboardsForSync) && billboardsForSync.length > 0) {
+        Promise.all(billboardsForSync.map(async (b) => {
+          const bId = String(b?.id || b?.billboardId || b);
+          const bStart = b?.bookingDetails?.startDate || currentCampaign.startDate;
+          const bEnd = b?.bookingDetails?.endDate || currentCampaign.endDate;
+          if (bId && bStart && bEnd) {
+            await recomputeAndUpsertForRange(bId, bStart, bEnd);
+          }
+        })).catch(e => logger.warn('Async slot recompute after status update failed:', e.message));
+      }
+    } catch (syncErr) {
+      logger.warn('Could not trigger slot recompute after status update:', syncErr.message);
+    }
 
     // Browser push notification for admin on campaign approval/action
     const pushTitles = {

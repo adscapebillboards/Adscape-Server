@@ -36,13 +36,16 @@ function dateKeyIST(d) {
 async function getBillboardMaxSlots(billboardId) {
   const billboard = await prisma.billboard.findUnique({
     where: { id: String(billboardId) },
-    select: { max_slots_per_day: true, maxAdvertisers: true }
+    select: { max_slots_per_day: true, maxAdvertisers: true, type: true }
   });
 
   const configuredSlots = Number(billboard?.max_slots_per_day || billboard?.maxAdvertisers);
-  return Number.isFinite(configuredSlots) && configuredSlots > 0
-    ? Math.floor(configuredSlots)
-    : TOTAL_SLOTS_PER_DAY;
+  if (Number.isFinite(configuredSlots) && configuredSlots > 0) {
+    return Math.floor(configuredSlots);
+  }
+  
+  const isStatic = billboard?.type?.toLowerCase() === 'static' || billboard?.type?.toLowerCase() === 'traditional';
+  return isStatic ? 1 : TOTAL_SLOTS_PER_DAY;
 }
 
 async function computeAvailabilityForRange(billboardId, startDate, endDate, totalSlotsPerDay) {
@@ -54,9 +57,10 @@ async function computeAvailabilityForRange(billboardId, startDate, endDate, tota
     where: {
       // overlap window at campaign level as coarse filter
       startDate: { lte: endOfDay(endDate) },
-      endDate: { gte: startOfDay(startDate) }
+      endDate: { gte: startOfDay(startDate) },
+      status: { notIn: ['REJECTED', 'rejected', 'Rejected'] }
     },
-    select: { id: true, billboards: true }
+    select: { id: true, billboards: true, startDate: true, endDate: true }
   });
 
   for (const camp of overlappingCampaigns) {
@@ -66,11 +70,16 @@ async function computeAvailabilityForRange(billboardId, startDate, endDate, tota
       try { boards = JSON.parse(boards); } catch { continue; }
     }
     if (!Array.isArray(boards)) continue;
-    const match = boards.find(b => String(b?.id) === String(billboardId));
+    
+    const match = boards.find(b => {
+      const bId = typeof b === 'object' ? (b?.id || b?.billboardId) : b;
+      return String(bId) === String(billboardId);
+    });
+    
     if (!match) continue;
 
-    const bs = match.bookingDetails?.startDate || match.startDate || camp.startDate;
-    const be = match.bookingDetails?.endDate || match.endDate || camp.endDate;
+    const bs = (typeof match === 'object' ? (match.bookingDetails?.startDate || match.startDate) : null) || camp.startDate;
+    const be = (typeof match === 'object' ? (match.bookingDetails?.endDate || match.endDate) : null) || camp.endDate;
     if (!bs || !be) continue;
     const bStart = startOfDay(new Date(bs));
     const bEnd = endOfDay(new Date(be));
@@ -376,13 +385,12 @@ exports.getAvailabilitySummaryByDate = async (req, res) => {
 };
 
 // GET /api/billboards/:billboardId/slots - Returns simple JSON format { "DD.MM.YYYY": available_slots }
+// Reads pre-calculated values from slot_availability table (updated after each campaign event).
+// Falls back to live computation only for dates with no stored record.
 exports.getBillboardSlots = async (req, res) => {
   try {
     const { billboardId } = req.params;
-    const start = parseDateParam(
-      req.query.start,
-      startOfDay(new Date())
-    );
+    const start = parseDateParam(req.query.start, startOfDay(new Date()));
     const end = parseDateParam(
       req.query.end,
       startOfDay(new Date(new Date().setDate(new Date().getDate() + 59)))
@@ -392,48 +400,65 @@ exports.getBillboardSlots = async (req, res) => {
       return res.status(400).json({ error: 'Invalid date range' });
     }
 
-    // Get billboard with slot availability JSON
-    const billboard = await prisma.billboard.findUnique({
-      where: { id: String(billboardId) },
-      select: { 
-        max_slots_per_day: true,
-        slotAvailability: true
-      }
-    });
-    
     const maxSlotsPerDay = await getBillboardMaxSlots(billboardId);
-    // Always recompute and persist the requested range so DB availability stays dynamic.
-    const recomputeMap = await syncBillboardAvailabilityForRange(billboardId, start, end);
 
-    // Build simple JSON format: { "DD.MM.YYYY": available_slots }
+    // --- Primary source: slot_availability table (pre-calculated after each campaign) ---
+    const hasSlotAvailabilityModel =
+      prisma.slot_availability && typeof prisma.slot_availability.findMany === 'function';
+
+    let storedRows = [];
+    if (hasSlotAvailabilityModel) {
+      storedRows = await prisma.slot_availability.findMany({
+        where: {
+          billboard_id: String(billboardId),
+          date: { gte: startOfDay(start), lte: endOfDay(end) },
+        },
+        select: { date: true, available_slots: true },
+      });
+    }
+
+    // Index stored rows by IST date key (YYYY-MM-DD) for O(1) lookup
+    const storedByKey = new Map();
+    for (const row of storedRows) {
+      storedByKey.set(dateKeyIST(row.date), Number(row.available_slots));
+    }
+
+    // Identify which dates in the range have NO stored record (need live computation)
+    const missingDates = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      if (!storedByKey.has(dateKeyIST(d))) {
+        missingDates.push(new Date(d));
+      }
+    }
+
+    // For missing dates, run a targeted live computation and persist the results
+    if (missingDates.length > 0) {
+      // Compute the smallest continuous range covering all missing dates
+      const liveStart = missingDates[0];
+      const liveEnd = missingDates[missingDates.length - 1];
+      try {
+        const liveMap = await syncBillboardAvailabilityForRange(billboardId, liveStart, liveEnd);
+        // Merge live results into storedByKey
+        for (const [key, data] of Object.entries(liveMap)) {
+          const avail = data.unbooked?.length ?? Math.max(0, maxSlotsPerDay - (data.booked?.length ?? 0));
+          storedByKey.set(key, avail);
+        }
+      } catch (liveErr) {
+        logger.warn(`Live availability fallback failed for billboard ${billboardId}:`, liveErr.message);
+      }
+    }
+
+    // Build DD.MM.YYYY response map from the (now complete) stored values
     const slotsMap = {};
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const key = dateKeyIST(d);
-      const dayData = recomputeMap[key] || { 
-        booked: [], 
-        unbooked: Array.from({ length: maxSlotsPerDay }, (_, i) => i + 1), 
-        totalSlots: maxSlotsPerDay 
-      };
-      const availableSlots = dayData.unbooked?.length || (maxSlotsPerDay - (dayData.booked?.length || 0));
-      
-      // Format date as DD.MM.YYYY
-      const day = String(d.getDate()).padStart(2, '0');
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const year = d.getFullYear();
-      const dateStr = `${day}.${month}.${year}`;
-      
-      slotsMap[dateStr] = Math.max(0, availableSlots);
+      const [istYear, istMonth, istDay] = key.split('-');
+      const dateStr = `${istDay}.${istMonth}.${istYear}`;
+      // Default to maxSlotsPerDay if still missing (live computation also failed)
+      slotsMap[dateStr] = storedByKey.has(key) ? storedByKey.get(key) : maxSlotsPerDay;
     }
 
-    await prisma.billboard.update({
-      where: { id: String(billboardId) },
-      data: {
-        slotAvailability: {
-          ...(billboard?.slotAvailability && typeof billboard.slotAvailability === 'object' ? billboard.slotAvailability : {}),
-          ...slotsMap
-        }
-      }
-    });
+    logger.info(`[getBillboardSlots] billboard=${billboardId} stored=${storedRows.length} liveComputed=${missingDates.length} total=${Object.keys(slotsMap).length}`);
 
     res.json(slotsMap);
   } catch (error) {
