@@ -468,3 +468,21 @@ model PlaybackAnalytics {
   @@index([receivedAt], map: "idx_playback_analytics_received_at")
   @@map("playback_analytics")
 }
+
+// Developer-facing error log storage for rendering server errors in the admin panel.
+model ErrorLog {
+  id         Int       @id @default(autoincrement())
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  level      String    @default("error") @db.VarChar(10)
+  message    String
+  stack      String?
+  method     String?   @db.VarChar(10)
+  path       String?
+  statusCode Int?      @map("status_code")
+  userId     String?   @map("user_id")
+  userEmail  String?   @map("user_email")
+  meta       Json?
+
+  @@index([createdAt], map: "idx_error_logs_created_at")
+  @@map("error_logs")
+}

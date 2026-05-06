@@ -41,6 +41,7 @@ const superadminEmailRoutes = require('./routes/superadminEmails');
 const notificationsRoutes = require('./routes/notifications');
 const pushRoutes = require('./routes/push');
 const partnersRoutes = require('./routes/partners');
+const serverLogsRoutes = require('./routes/serverLogs');
 const path = require('path');
 const fs = require('fs');
 const playerRoutes = require('./routes/players');
@@ -363,6 +364,8 @@ app.use('/api', publisherDashboardRoutes);
 
 // Superadmin routes
 app.use('/api', superadminRoutes);
+// Developer/Superadmin log viewer routes
+app.use('/api', serverLogsRoutes);
 
 // Setup routes
 app.use('/api', setupRoutes);
@@ -447,6 +450,40 @@ app.use((err, req, res, next) => {
     });
     return res.status(413).json({ error: 'payload_too_large' });
   }
+
+  // Persist error logs for developer-facing admin viewer (best-effort; never blocks response)
+  try {
+    const statusCode = err?.statusCode || err?.status || 500;
+    const message = err?.message ? String(err.message) : 'Unhandled error';
+    const stack = err?.stack ? String(err.stack) : null;
+    const userId = req.user?.id != null ? String(req.user.id) : null;
+    const userEmail = req.user?.email != null ? String(req.user.email) : null;
+
+    // Fire-and-forget so API errors never wait on DB
+    setImmediate(() => {
+      prisma.errorLog.create({
+        data: {
+          level: 'error',
+          message,
+          stack,
+          method: req.method,
+          path: req.originalUrl || req.url,
+          statusCode,
+          userId,
+          userEmail,
+          meta: {
+            name: err?.name,
+            code: err?.code,
+          },
+        }
+      }).catch((e) => {
+        logger.warn('Failed to persist error log:', e?.message || e);
+      });
+    });
+  } catch (e) {
+    // ignore
+  }
+
   logger.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });

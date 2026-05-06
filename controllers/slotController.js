@@ -27,9 +27,10 @@ const getSlotsByBillboard = async (req, res) => {
     const records = await prisma.generatedSlot.findMany();
     const slots = flattenGeneratedSlotRecords(records, { billboardId: billboard_id }).map(slot => ({
       id: slot.id,
-      startDate: slot.startDate,
-      endDate: slot.endDate,
-      slotNumber: slot.slotNumber
+      billboard_id,
+      start_date: slot.startDate instanceof Date ? slot.startDate.toISOString() : String(slot.startDate),
+      end_date: slot.endDate instanceof Date ? slot.endDate.toISOString() : String(slot.endDate),
+      slot_number: Number(slot.slotNumber)
     }));
 
     logger.db('SELECT', `Slots fetched for billboard ${billboard_id}`);
