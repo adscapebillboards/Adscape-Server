@@ -108,6 +108,20 @@ const getUserCampaigns = async (req, res) => {
     res.json(campaigns);
   } catch (err) {
     logger.error('Get campaigns error:', err);
+    try {
+      const { persistError } = require('../services/errorLogService');
+      persistError({
+        level: 'error',
+        message: err?.message || 'Get campaigns error',
+        stack: err?.stack || null,
+        method: req.method,
+        path: req.originalUrl || req.url,
+        statusCode: 500,
+        userId: req.user?.id,
+        userEmail: req.user?.email,
+        meta: { name: err?.name, code: err?.code, meta: err?.meta, clientVersion: err?.clientVersion },
+      }).catch(() => { });
+    } catch { }
     res.status(500).json({ message: 'Failed to retrieve campaigns' });
   }
 };

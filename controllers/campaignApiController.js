@@ -475,18 +475,15 @@ const getAllCampaigns = async (req, res) => {
 
 // Get campaigns by user email (for billboard owners/publishers)
 const getCampaignsByUserEmail = async (req, res) => {
-  const { userEmail } = req.query;
-
-  if (!userEmail) {
-    return res.status(400).json({ error: 'User email is required' });
-  }
+  const requesterEmail = req.user?.email;
+  if (!requesterEmail) return res.status(401).json({ error: 'Authentication required' });
 
   try {
     // Get publisher's billboards
     // Filter by userId (which stores the billboard owner's email in the user_id column)
     const publisherBillboards = await prisma.billboard.findMany({
       where: {
-        userId: userEmail
+        userId: requesterEmail
       },
       select: {
         id: true
@@ -496,7 +493,7 @@ const getCampaignsByUserEmail = async (req, res) => {
     const billboardIds = publisherBillboards.map(bb => bb.id);
 
     if (billboardIds.length === 0) {
-      logger.campaign('No billboards found for publisher', `User: ${userEmail}`);
+      logger.campaign('No billboards found for publisher', `User: ${requesterEmail}`);
       return res.json([]);
     }
 
@@ -525,8 +522,31 @@ const getCampaignsByUserEmail = async (req, res) => {
       return false;
     });
 
-    logger.campaign('User campaigns fetched (owner view)', `User: ${userEmail}, Count: ${filteredCampaigns.length}`);
-    res.json(filteredCampaigns);
+    // For publisher accounts: only return the billboards they own and mask the end-user identity.
+    const safeCampaigns = filteredCampaigns.map((campaign) => {
+      let billboards = campaign.billboards;
+      if (typeof billboards === 'string') {
+        try { billboards = JSON.parse(billboards); } catch { billboards = []; }
+      }
+
+      const ownedBillboards = Array.isArray(billboards)
+        ? billboards.filter((bb) => billboardIds.includes(bb.id))
+        : [];
+
+      return {
+        ...campaign,
+        userName: null,
+        billboards: ownedBillboards.map((bb) => ({
+          ...bb,
+          userName: null,
+          userEmail: null,
+          userId: null,
+        })),
+      };
+    });
+
+    logger.campaign('User campaigns fetched (publisher owner view)', `User: ${requesterEmail}, Count: ${safeCampaigns.length}`);
+    res.json(safeCampaigns);
   } catch (err) {
     logger.error("Error fetching user campaigns:", err);
     res.status(500).json({ error: "Internal Server Error" });

@@ -31,7 +31,17 @@ const billboardListRoutes = require('./routes/billboardList');
 const campaignApiRoutes = require('./routes/campaignApi');
 const contactEmailRoutes = require('./routes/contactEmail');
 const registrationRoutes = require('./routes/registrations');
-const publisherMetricsRoutes = require('./routes/publisherMetrics');
+let publisherMetricsRoutes;
+try {
+  // Optional route module (some deployments omit this file)
+  // Keep server booting and log a clear error if missing/broken.
+  // eslint-disable-next-line global-require
+  publisherMetricsRoutes = require('./routes/publisherMetrics');
+} catch (e) {
+  logger.error('Failed to load publisherMetrics routes; mounting 503 handler:', e?.message || e);
+  publisherMetricsRoutes = express.Router();
+  publisherMetricsRoutes.use((_req, res) => res.status(503).json({ error: 'publisher_metrics_unavailable' }));
+}
 const publisherRoutes = require('./routes/publishers');
 const dashboardRoutes = require('./routes/dashboard');
 const publisherDashboardRoutes = require('./routes/publisherDashboard');
@@ -453,31 +463,46 @@ app.use((err, req, res, next) => {
 
   // Persist error logs for developer-facing admin viewer (best-effort; never blocks response)
   try {
+    const fallbackErrorLogStore = require('./services/fallbackErrorLogStore');
     const statusCode = err?.statusCode || err?.status || 500;
     const message = err?.message ? String(err.message) : 'Unhandled error';
     const stack = err?.stack ? String(err.stack) : null;
     const userId = req.user?.id != null ? String(req.user.id) : null;
     const userEmail = req.user?.email != null ? String(req.user.email) : null;
+    const entry = {
+      id: Date.now(), // best-effort id for file fallback
+      createdAt: new Date().toISOString(),
+      level: 'error',
+      message,
+      stack,
+      method: req.method,
+      path: req.originalUrl || req.url,
+      statusCode,
+      userId,
+      userEmail,
+      meta: {
+        name: err?.name,
+        code: err?.code,
+      },
+    };
 
     // Fire-and-forget so API errors never wait on DB
     setImmediate(() => {
       prisma.errorLog.create({
         data: {
-          level: 'error',
-          message,
-          stack,
-          method: req.method,
-          path: req.originalUrl || req.url,
-          statusCode,
-          userId,
-          userEmail,
-          meta: {
-            name: err?.name,
-            code: err?.code,
-          },
+          level: entry.level,
+          message: entry.message,
+          stack: entry.stack,
+          method: entry.method,
+          path: entry.path,
+          statusCode: entry.statusCode,
+          userId: entry.userId,
+          userEmail: entry.userEmail,
+          meta: entry.meta,
         }
       }).catch((e) => {
         logger.warn('Failed to persist error log:', e?.message || e);
+        fallbackErrorLogStore.append(entry);
       });
     });
   } catch (e) {

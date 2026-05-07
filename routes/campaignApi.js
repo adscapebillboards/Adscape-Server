@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const auth = require('../middleware/auth');
+const roleAuth = require('../middleware/roleAuth');
 const { generateSlots } = require('../utils/slotGenerator');
 const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 const {
@@ -21,40 +23,40 @@ const {
 } = require('../controllers/campaignApiController');
 
 // Campaign creation — JSON body only (fast path, no file upload blocking)
-router.post('/create-campaign', createCampaign);
+router.post('/create-campaign', auth, createCampaign);
 
 // Attach a file URL to a campaign billboard (called after async TUS upload completes)
-router.post('/campaigns/:id/attach-file', attachCampaignFile);
+router.post('/campaigns/:id/attach-file', auth, attachCampaignFile);
 
 // Get campaigns by user
-router.get('/campaigns', getCampaignsByUser);
+router.get('/campaigns', auth, getCampaignsByUser);
 
 // Get all campaigns (admin)
-router.get('/campaignsu', getAllCampaigns);
+router.get('/campaignsu', auth, roleAuth(['superadmin']), getAllCampaigns);
 
 // Get campaigns by user email (for billboard owners)
-router.get('/campaignsuz', getCampaignsByUserEmail);
+router.get('/campaignsuz', auth, roleAuth(['publisher', 'superadmin']), getCampaignsByUserEmail);
 
 // Complete payment for a campaign (dedicated endpoint)
-router.post('/campaigns/:id/complete-payment', completePayment);
+router.post('/campaigns/:id/complete-payment', auth, completePayment);
 
 // Update campaign status
-router.put('/campaigns/:id/status', updateCampaignStatus);
+router.put('/campaigns/:id/status', auth, roleAuth(['superadmin']), updateCampaignStatus);
 
 // Update individual billboard status within a campaign
-router.put('/campaigns/:campaignId/billboards/:billboardId/status', updateBillboardStatus);
+router.put('/campaigns/:campaignId/billboards/:billboardId/status', auth, roleAuth(['superadmin']), updateBillboardStatus);
 
 // Get campaign with individual billboard statuses
-router.get('/campaigns/:id/with-billboard-statuses', getCampaignWithBillboardStatuses);
+router.get('/campaigns/:id/with-billboard-statuses', auth, getCampaignWithBillboardStatuses);
 
 // Update campaign name
-router.put('/update-campaign-name', updateCampaignName);
+router.put('/update-campaign-name', auth, roleAuth(['superadmin']), updateCampaignName);
 
 // Delete campaign
-router.delete('/campaigns/:id', deleteCampaign);
+router.delete('/campaigns/:id', auth, roleAuth(['superadmin']), deleteCampaign);
 
 // Delete individual billboard from campaign
-router.delete('/campaigns/:campaignId/billboards/:billboardId', deleteBillboardFromCampaign);
+router.delete('/campaigns/:campaignId/billboards/:billboardId', auth, roleAuth(['superadmin']), deleteBillboardFromCampaign);
 
 // ===== DEV HELPER: Generate slots for today (bypasses payment gate) =====
 router.post('/campaigns/:id/generate-slots-today', async (req, res) => {

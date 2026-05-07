@@ -3,6 +3,7 @@ const prisma = require('../db/db');
 const authenticateToken = require('../middleware/auth');
 const roleAuth = require('../middleware/roleAuth');
 const logger = require('../config/logger');
+const fallbackErrorLogStore = require('../services/fallbackErrorLogStore');
 
 const router = express.Router();
 
@@ -16,17 +17,28 @@ router.get('/server-logs/errors', authenticateToken, roleAuth(['superadmin']), a
 
     const where = beforeId ? { id: { lt: beforeId } } : undefined;
 
-    const rows = await prisma.errorLog.findMany({
-      where,
-      orderBy: [{ id: 'desc' }],
-      take: limit,
-    });
+    try {
+      const rows = await prisma.errorLog.findMany({
+        where,
+        orderBy: [{ id: 'desc' }],
+        take: limit,
+      });
 
-    const nextBeforeId = rows.length > 0 ? rows[rows.length - 1].id : null;
-    res.json({
-      items: rows,
-      nextBeforeId,
-    });
+      const nextBeforeId = rows.length > 0 ? rows[rows.length - 1].id : null;
+      res.json({
+        items: rows,
+        nextBeforeId,
+        source: 'db',
+      });
+    } catch (dbErr) {
+      logger.warn('DB errorLog query failed; using fallback store:', dbErr?.code || dbErr?.message || dbErr);
+      const items = await fallbackErrorLogStore.readLatest(limit);
+      res.json({
+        items,
+        nextBeforeId: null,
+        source: 'file',
+      });
+    }
   } catch (error) {
     logger.error('Failed to fetch error logs:', error);
     res.status(500).json({ error: 'Failed to fetch error logs' });
@@ -34,4 +46,3 @@ router.get('/server-logs/errors', authenticateToken, roleAuth(['superadmin']), a
 });
 
 module.exports = router;
-

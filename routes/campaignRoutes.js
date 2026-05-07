@@ -19,7 +19,7 @@ router.post('/', auth, createCampaign);
 router.get('/', auth, getUserCampaigns);
 
 // Update individual billboard status within a campaign
-router.put('/:campaignId/billboards/:billboardId/status', auth, updateBillboardStatus);
+router.put('/:campaignId/billboards/:billboardId/status', auth, roleAuth(['superadmin']), updateBillboardStatus);
 
 // Get campaign with individual billboard statuses
 router.get('/:id/with-billboard-statuses', auth, getCampaignWithBillboardStatuses);

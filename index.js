@@ -1,4 +1,41 @@
 const http = require('http');
+
+// Capture startup/runtime crashes (including module-load errors) so they show up in admin logs.
+process.on('uncaughtException', (err) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { persistError } = require('./services/errorLogService');
+    persistError({
+      level: 'error',
+      message: err?.message || 'uncaughtException',
+      stack: err?.stack || null,
+      method: null,
+      path: 'process:uncaughtException',
+      statusCode: 500,
+      meta: { name: err?.name, code: err?.code },
+    }).catch(() => { });
+  } catch { }
+  // Give best-effort time for async persistence
+  setTimeout(() => process.exit(1), 150);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(typeof reason === 'string' ? reason : 'unhandledRejection');
+  try {
+    // eslint-disable-next-line global-require
+    const { persistError } = require('./services/errorLogService');
+    persistError({
+      level: 'error',
+      message: err?.message || 'unhandledRejection',
+      stack: err?.stack || null,
+      method: null,
+      path: 'process:unhandledRejection',
+      statusCode: 500,
+      meta: { name: err?.name },
+    }).catch(() => { });
+  } catch { }
+});
+
 const app = require('./app-new'); // import your real app
 const port = process.env.PORT || 4000;
 const cors = require('cors');
