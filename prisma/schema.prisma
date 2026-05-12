@@ -139,6 +139,8 @@ model Campaign {
   createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime? @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   owner        String?
+  approvedByEmail String? @map("approved_by_email") @db.VarChar(255)
+  approvedByRole  String? @map("approved_by_role") @db.VarChar(50)
 
   @@map("campaigns")
 }

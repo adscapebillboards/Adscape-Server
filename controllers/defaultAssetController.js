@@ -82,6 +82,9 @@ exports.createDefaultAsset = async (req, res) => {
 
     await ensureDefaultAssetTable(prisma);
     
+    // Deactivate previous active default assets
+    await prisma.$executeRawUnsafe(`UPDATE "DefaultAsset" SET "isActive" = false WHERE "isActive" = true`);
+    
     const result = await prisma.$executeRawUnsafe(
       `INSERT INTO "DefaultAsset" ("assetUrl", "assetName", "assetType", "duration", "isActive")
        VALUES ($1, $2, $3, $4, true)
@@ -89,8 +92,29 @@ exports.createDefaultAsset = async (req, res) => {
       assetUrl, assetName, assetType, duration
     );
     
+    // Update existing default slots
+    await prisma.$executeRawUnsafe(
+      `UPDATE "daily_slots" SET "asset_url" = $1 WHERE "campaign_id" IS NULL`,
+      assetUrl
+    );
+    
+    // Broadcast to connected players
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        const { getPlaylistForScreen } = require('../utils/socketHelpers');
+        const bbs = await prisma.$queryRawUnsafe(`SELECT screen_id FROM billboards WHERE screen_id IS NOT NULL`);
+        for (const bb of bbs) {
+          const { playlist, date } = await getPlaylistForScreen(bb.screen_id);
+          io.to(`screen:${bb.screen_id}`).emit('playlist', { screenId: bb.screen_id, playlist, date });
+        }
+      }
+    } catch(e) {
+      logger.error('Failed to broadcast new default asset', e);
+    }
+    
     logger.info('Default asset created', { assetUrl, assetName });
-    res.json({ success: true, defaultAsset: result });
+    res.json({ success: true, defaultAsset: result[0] });
   } catch (error) {
     logger.error('Create default asset error:', error);
     res.status(500).json({ error: 'Failed to create default asset', message: error?.message });
@@ -145,6 +169,29 @@ exports.updateDefaultAsset = async (req, res) => {
     
     if (result.length === 0) {
       return res.status(404).json({ error: 'Default asset not found' });
+    }
+    
+    if (assetUrl) {
+      // Update existing default slots
+      await prisma.$executeRawUnsafe(
+        `UPDATE "daily_slots" SET "asset_url" = $1 WHERE "campaign_id" IS NULL`,
+        assetUrl
+      );
+      
+      // Broadcast to connected players
+      try {
+        const io = req.app.get('io');
+        if (io) {
+          const { getPlaylistForScreen } = require('../utils/socketHelpers');
+          const bbs = await prisma.$queryRawUnsafe(`SELECT screen_id FROM billboards WHERE screen_id IS NOT NULL`);
+          for (const bb of bbs) {
+            const { playlist, date } = await getPlaylistForScreen(bb.screen_id);
+            io.to(`screen:${bb.screen_id}`).emit('playlist', { screenId: bb.screen_id, playlist, date });
+          }
+        }
+      } catch(e) {
+        logger.error('Failed to broadcast new default asset', e);
+      }
     }
     
     logger.info('Default asset updated', { id, assetUrl });

@@ -738,9 +738,15 @@ const updateCampaignStatus = async (req, res) => {
     logger.info(`📊 Normalized status: ${newStatus}`);
 
     // Perform the database update
+    const updateData = { status: newStatus };
+    if (newStatus === 'APPROVED' && req.user) {
+      updateData.approvedByEmail = req.user.email || null;
+      updateData.approvedByRole = req.user.role || null;
+    }
+
     const campaign = await prisma.campaign.update({
       where: { id },
-      data: { status: newStatus }
+      data: updateData
     });
 
     logger.info(`✅ Database update completed. Campaign status set to: ${campaign.status}`);
@@ -1255,7 +1261,9 @@ const updateBillboardStatus = async (req, res) => {
           where: { id: campaignId },
           data: {
             status: 'APPROVED',
-            updatedAt: new Date()
+            updatedAt: new Date(),
+            approvedByEmail: req.user?.email || null,
+            approvedByRole: req.user?.role || null
           }
         });
 

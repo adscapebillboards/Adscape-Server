@@ -235,9 +235,15 @@ const updateCampaignStatus = async (req, res) => {
   const { status } = req.body;
 
   try {
+    const updateData = { status };
+    if (status === 'APPROVED' && req.user) {
+      updateData.approvedByEmail = req.user.email || null;
+      updateData.approvedByRole = req.user.role || null;
+    }
+
     const campaign = await prisma.campaign.update({
       where: { id },
-      data: { status },
+      data: updateData,
       include: {
         generatedSlots: {
           include: {

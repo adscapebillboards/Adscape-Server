@@ -12,7 +12,6 @@ const getStartOfDayIST = (dateStr) => {
  */
 async function getPlaylistForScreen(screenId) {
     try {
-        // Get today's date in IST YYYY-MM-DD
         const istDate = new Intl.DateTimeFormat('en-CA', {
             timeZone: 'Asia/Kolkata',
             year: 'numeric',
@@ -23,6 +22,9 @@ async function getPlaylistForScreen(screenId) {
         console.log(`[SOCKET_HELPER] todayIST determined as: ${todayIST}`);
 
         const scheduleDate = new Date(todayIST);
+
+        const defaultAsset = await prisma.defaultAsset.findFirst({ where: { isActive: true } });
+        const defaultUrl = defaultAsset ? defaultAsset.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
 
         const billboard = await prisma.billboard.findFirst({
             where: {
@@ -91,8 +93,7 @@ async function getPlaylistForScreen(screenId) {
             });
             console.log(`[SOCKET_HELPER] Ensured DailySchedule exists: ${schedule.id}`);
 
-            const defaultAsset = await prisma.defaultAsset.findFirst({ where: { isActive: true } });
-            const defaultUrl = defaultAsset ? defaultAsset.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+
 
             const existingSlotCount = await prisma.dailySlot.count({
                 where: { scheduleId: schedule.id }
@@ -164,8 +165,7 @@ async function getPlaylistForScreen(screenId) {
         console.log(`[SOCKET_HELPER] Initialized ${slots.length} slots for schedule ${schedule.id}`);
 
         // 4. Dynamic Asset Update for logo placeholders
-        const defaultLogo = 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
-        const slotsWithLogo = slots.filter(s => s.assetUrl === defaultLogo && s.campaignId);
+        const slotsWithLogo = slots.filter(s => s.assetUrl === defaultUrl && s.campaignId);
 
         if (slotsWithLogo.length > 0) {
             const dayStart = getStartOfDayIST(todayIST);

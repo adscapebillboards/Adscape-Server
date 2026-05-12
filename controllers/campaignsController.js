@@ -195,7 +195,9 @@ const updateBillboardStatus = async (req, res) => {
           where: { id: campaignId },
           data: {
             status: 'APPROVED',
-            updatedAt: new Date()
+            updatedAt: new Date(),
+            approvedByEmail: req.user?.email || null,
+            approvedByRole: req.user?.role || null
           }
         });
 
