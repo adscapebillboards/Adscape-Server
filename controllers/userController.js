@@ -46,7 +46,9 @@ const insertPublisher = async ({ name, email, phone, location, joinDate, passwor
       phone,
       location,
       joinDate,
-      password
+      password,
+      status: 'active',
+      role: 'publisher'
     }
   });
 };

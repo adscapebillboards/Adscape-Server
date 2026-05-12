@@ -7,6 +7,8 @@ const logger = require('../config/logger');
 const { OAuth2Client } = require('google-auth-library');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const { normalizeRole } = require('../utils/roles');
+const { isPublisherKycComplete, getPermissionsObject } = require('../utils/publisherKyc');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 let GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -792,7 +794,8 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 // POST new publisher
-router.post('/', auth, roleAuth(['superadmin']), async (req, res) => {
+// Admin-created publishers should be auto-approved (active) and not require superadmin approval.
+router.post('/', auth, roleAuth(['superadmin', 'admin']), async (req, res) => {
   try {
     const {
       name,
@@ -812,6 +815,9 @@ router.post('/', auth, roleAuth(['superadmin']), async (req, res) => {
       website
     } = req.body;
 
+    const requesterRole = normalizeRole(req.user?.role);
+    const effectiveStatus = requesterRole === 'admin' ? 'active' : (status || 'active');
+
     const publisher = await prisma.publisher.create({
       data: {
         name,
@@ -820,7 +826,7 @@ router.post('/', auth, roleAuth(['superadmin']), async (req, res) => {
         location,
         revenue,
         totalBillboards: totalBillboards ? parseInt(totalBillboards) : 0,
-        status: status || 'active',
+        status: effectiveStatus,
         password: password || '',
         address,
         businessType,
@@ -829,6 +835,7 @@ router.post('/', auth, roleAuth(['superadmin']), async (req, res) => {
         pincode,
         state,
         website,
+        role: 'publisher',
         joinDate: new Date()
       }
     });
@@ -876,6 +883,203 @@ router.delete('/:id', auth, roleAuth(['superadmin']), async (req, res) => {
   } catch (error) {
     console.error('Error deactivating publisher:', error);
     res.status(500).json({ error: 'Failed to deactivate publisher' });
+  }
+});
+
+// Basic publisher signup (Step 1 only). KYC (Step 2) is completed after first login.
+router.post('/basic-signup', async (req, res) => {
+  try {
+    const { personalInfo } = req.body || {};
+    const email = String(personalInfo?.email || '').trim().toLowerCase();
+    const firstName = String(personalInfo?.firstName || '').trim();
+    const lastName = String(personalInfo?.lastName || '').trim();
+    const phone = String(personalInfo?.phone || '').trim();
+    const password = String(personalInfo?.password || '');
+
+    if (!firstName || !lastName || !email || !phone || !password) {
+      return res.status(400).json({ error: 'firstName, lastName, email, phone, and password are required' });
+    }
+
+    const existingPublisher = await prisma.publisher.findUnique({ where: { email } });
+    if (existingPublisher) {
+      return res.status(409).json({ error: 'A publisher with this email already exists' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const publisher = await prisma.publisher.create({
+      data: {
+        name: `${firstName} ${lastName}`.trim(),
+        email,
+        phone,
+        location: null,
+        status: 'active',
+        role: 'publisher',
+        password: hashedPassword,
+        joinDate: new Date(),
+        permissions: { kycCompleted: false },
+      },
+    });
+    const kycCompleted = isPublisherKycComplete(publisher);
+    const token = jwt.sign({ id: publisher.id, email: publisher.email, role: 'publisher' }, JWT_SECRET, { expiresIn: '30d' });
+    return res.status(201).json({
+      token,
+      user: {
+        id: publisher.id,
+        email: publisher.email,
+        name: publisher.name,
+        phone: publisher.phone,
+        location: publisher.location,
+        role: 'publisher',
+        kycCompleted,
+        kycRequired: !kycCompleted,
+      },
+      publisher,
+    });
+  } catch (error) {
+    console.error('Error in basic-signup:', error);
+    return res.status(500).json({ error: 'Signup failed' });
+  }
+});
+
+// Basic publisher signup for OAuth flow (Step 1 only). KYC (Step 2) is completed after first login.
+router.post('/oauth/basic-signup', async (req, res) => {
+  try {
+    const { personalInfo, oauthData } = req.body || {};
+    const email = String(oauthData?.email || personalInfo?.email || '').trim().toLowerCase();
+    const nameFromOauth = String(oauthData?.name || '').trim();
+    const firstName = String(personalInfo?.firstName || '').trim();
+    const lastName = String(personalInfo?.lastName || '').trim();
+    const name = nameFromOauth || `${firstName} ${lastName}`.trim();
+    const phone = String(personalInfo?.phone || '').trim();
+    const googleId = String(oauthData?.googleId || '').trim();
+
+    if (!email || !name || !phone || !googleId) {
+      return res.status(400).json({ error: 'email, name, phone, and oauthData.googleId are required' });
+    }
+
+    const existingPublisher = await prisma.publisher.findUnique({ where: { email } });
+    if (existingPublisher) {
+      return res.status(409).json({ error: 'A publisher with this email already exists' });
+    }
+
+    const publisher = await prisma.publisher.create({
+      data: {
+        name,
+        email,
+        phone,
+        location: null,
+        status: 'active',
+        role: 'publisher',
+        password: '',
+        googleId,
+        joinDate: new Date(),
+        permissions: { kycCompleted: false },
+      },
+    });
+    const kycCompleted = isPublisherKycComplete(publisher);
+    const token = jwt.sign({ id: publisher.id, email: publisher.email, role: 'publisher' }, JWT_SECRET, { expiresIn: '30d' });
+    return res.status(201).json({
+      token,
+      user: {
+        id: publisher.id,
+        email: publisher.email,
+        name: publisher.name,
+        phone: publisher.phone,
+        location: publisher.location,
+        role: 'publisher',
+        kycCompleted,
+        kycRequired: !kycCompleted,
+      },
+      publisher,
+    });
+  } catch (error) {
+    console.error('Error in oauth/basic-signup:', error);
+    return res.status(500).json({ error: 'Signup failed' });
+  }
+});
+
+// Get current publisher profile + KYC state
+router.get('/self/profile', auth, roleAuth(['publisher']), async (req, res) => {
+  try {
+    const publisherId = Number(req.user?.id);
+    const publisher = await prisma.publisher.findUnique({
+      where: { id: publisherId },
+    });
+    if (!publisher) return res.status(404).json({ error: 'Publisher not found' });
+
+    const kycCompleted = isPublisherKycComplete(publisher);
+    res.json({
+      publisher,
+      kycCompleted,
+      kycRequired: !kycCompleted,
+    });
+  } catch (error) {
+    console.error('Error fetching publisher profile:', error);
+    res.status(500).json({ error: 'Failed to fetch publisher profile' });
+  }
+});
+
+// Finish KYC (Step 2) for the logged-in publisher
+router.put('/self/kyc', auth, roleAuth(['publisher']), async (req, res) => {
+  try {
+    const publisherId = Number(req.user?.id);
+    const {
+      companyName,
+      businessType,
+      address,
+      city,
+      state,
+      pincode,
+      website,
+      documents,
+    } = req.body || {};
+
+    const publisher = await prisma.publisher.findUnique({ where: { id: publisherId } });
+    if (!publisher) return res.status(404).json({ error: 'Publisher not found' });
+
+    const currentBusinessInfo = publisher.businessInfo && typeof publisher.businessInfo === 'object' ? publisher.businessInfo : {};
+    const nextBusinessInfo = {
+      ...currentBusinessInfo,
+      companyName: companyName ?? currentBusinessInfo.companyName,
+      businessType: businessType ?? currentBusinessInfo.businessType,
+      address: address ?? currentBusinessInfo.address,
+      city: city ?? currentBusinessInfo.city,
+      state: state ?? currentBusinessInfo.state,
+      pincode: pincode ?? currentBusinessInfo.pincode,
+      website: website ?? currentBusinessInfo.website,
+      documents: {
+        ...(currentBusinessInfo.documents || {}),
+        ...(documents && typeof documents === 'object' ? documents : {}),
+      },
+      updatedAt: new Date().toISOString(),
+    };
+
+    const currentPerms = getPermissionsObject(publisher);
+
+    const updated = await prisma.publisher.update({
+      where: { id: publisherId },
+      data: {
+        businessInfo: nextBusinessInfo,
+        companyName: nextBusinessInfo.companyName || publisher.companyName,
+        businessType: nextBusinessInfo.businessType || publisher.businessType,
+        address: nextBusinessInfo.address || publisher.address,
+        city: nextBusinessInfo.city || publisher.city,
+        state: nextBusinessInfo.state || publisher.state,
+        pincode: nextBusinessInfo.pincode || publisher.pincode,
+        website: nextBusinessInfo.website || publisher.website,
+        permissions: {
+          ...currentPerms,
+          kycCompleted: isPublisherKycComplete({ ...publisher, businessInfo: nextBusinessInfo, permissions: currentPerms }),
+          kycCompletedAt: currentPerms.kycCompletedAt || (isPublisherKycComplete({ ...publisher, businessInfo: nextBusinessInfo, permissions: currentPerms }) ? new Date().toISOString() : null),
+        },
+      },
+    });
+
+    const kycCompleted = isPublisherKycComplete(updated);
+    res.json({ publisher: updated, kycCompleted, kycRequired: !kycCompleted });
+  } catch (error) {
+    console.error('Error updating publisher KYC:', error);
+    res.status(500).json({ error: 'Failed to update KYC' });
   }
 });
 

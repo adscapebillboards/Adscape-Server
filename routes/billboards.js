@@ -5,6 +5,7 @@ const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
 const auth = require('../middleware/auth');
 const roleAuth = require('../middleware/roleAuth');
+const requirePublisherKyc = require('../middleware/requirePublisherKyc');
 
 const controller = require('../controllers/billboardController');
 
@@ -30,7 +31,7 @@ router.get('/:id/bookings', auth, controller.getBillboardBookings);
 router.get('/:id/owner', auth, controller.getBillboardOwner);
 
 // POST new billboard with multiple image uploads
-router.post('/', auth, upload.array('images'), controller.addBillboard);
+router.post('/', auth, requirePublisherKyc, upload.array('images'), controller.addBillboard);
 
 // UPDATE billboard (optional: also support image uploads if needed)
 router.put('/:id', auth, controller.updateBillboard);

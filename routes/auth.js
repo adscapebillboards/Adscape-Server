@@ -15,6 +15,7 @@ if (GOOGLE_CLIENT_ID) {
 }
 const upload = multer({ storage: multer.memoryStorage() });
 const EmailService = require('../services/emailService');
+const { isPublisherKycComplete } = require('../utils/publisherKyc');
 
 // In-memory OTP store (email => { otp, expiresAt, verified })
 const otpStore = new Map();
@@ -467,6 +468,7 @@ router.post('/publishers/login', async (req, res) => {
     }
 
     const token = jwt.sign({ id: publisher.id, email: publisher.email, role: 'publisher' }, JWT_SECRET, { expiresIn: '30d' });
+    const kycCompleted = isPublisherKycComplete(publisher);
 
     res.json({
       token,
@@ -476,7 +478,9 @@ router.post('/publishers/login', async (req, res) => {
         name: publisher.name,
         phone: publisher.phone,
         location: publisher.location,
-        role: 'publisher'
+        role: 'publisher',
+        kycCompleted,
+        kycRequired: !kycCompleted
       }
     });
   } catch (err) {
