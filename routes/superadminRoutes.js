@@ -35,6 +35,9 @@ router.put('/profile', auth, superadminController.updateCurrentUserProfile);
 router.get('/superadmin-settings/developer-mode', auth, roleAuth(['developer']), superadminController.getDeveloperMode);
 router.put('/superadmin-settings/developer-mode', auth, roleAuth(['developer']), superadminController.updateDeveloperMode);
 
+// Clear campaigns and generated slots
+router.delete('/superadmin-settings/clear-campaigns-slots', auth, roleAuth(['developer']), superadminController.clearCampaignsAndSlots);
+
 module.exports = router;
 
 

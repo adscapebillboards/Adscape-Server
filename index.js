@@ -53,11 +53,15 @@ const io = new Server(server, {
     cors: {
         origin: [
             "http://localhost:3000",
+            "http://localhost:3001",
+            "http://localhost:3003",
             "http://localhost:5173",
             "http://127.0.0.1:3000",
+            "http://127.0.0.1:3003",
             "http://127.0.0.1:5173",
             "https://your-frontend-domain.com",
             "https://adscape.co.in",
+            "https://www.adscape.co.in",
             "https://admin.adscape.co.in",
             "http://localhost:8080",
             "http://127.0.0.1:5500",
@@ -185,29 +189,33 @@ io.on('connection', (socket) => {
     });
 
     // -------------------------------------------------------------
-    // Live Preview Support (Adscape Player -> Admin Dashboard)
+    // Live Preview Support (Client browser <-> Android Player)
     // -------------------------------------------------------------
+
+    // Client browser joins a viewer room so it gets screen-specific events
+    socket.on('viewer-join', (data) => {
+        const { screenId } = data || {};
+        if (!screenId) return;
+        socket.join(`viewer:${screenId}`);
+        console.log(`[SOCKET] Viewer joined room viewer:${screenId} (socketId=${socket.id})`);
+        socket.emit('viewer-joined', { screenId });
+    });
+
+    // Client browser (or admin) requests the player to send a snapshot
     socket.on('request-live-preview', (data) => {
-        // Dashboard client asks a given screen ID to send a snapshot
-        const { screenId } = data;
-        console.log(`[SOCKET] Admin requested live preview for screen: ${screenId}`);
-        // Notify the specific screen to capture and send a frame
+        const { screenId } = data || {};
         if (screenId) {
-            io.to(`screen:${screenId}`).emit('request-live-preview', { adminSocketId: socket.id });
+            io.to(`screen:${screenId}`).emit('request-live-preview', { adminSocketId: socket.id, screenId });
         }
     });
 
-    // Android App emits this back
+    // Android player relays a frame back — route to requesting socket AND viewer room
     socket.on('live-preview-frame', (data) => {
-        const { screenId, frameData, adminSocketId } = data;
-        // console.log(`[SOCKET] Received live preview frame from screen: ${screenId}`);
-        // Send it directly to the dashboard admin who requested it, or broadcast it to a specific admin room
-        if (adminSocketId) {
-            io.to(adminSocketId).emit('live-preview-frame-response', { screenId, frameData });
-        } else {
-            // Fallback: emit to all admins if we didn't track socket id
-            io.emit('live-preview-frame-response', { screenId, frameData });
-        }
+        const { screenId, frameData, adminSocketId } = data || {};
+        if (!frameData) return;
+        const payload = { screenId, frameData };
+        if (adminSocketId) io.to(adminSocketId).emit('live-preview-frame-response', payload);
+        if (screenId) io.to(`viewer:${screenId}`).emit('live-preview-frame-response', payload);
     });
 
 

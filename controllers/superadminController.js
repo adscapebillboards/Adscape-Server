@@ -3,12 +3,18 @@ const logger = require('../config/logger');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { getDeveloperMode, setDeveloperMode } = require('../utils/developerMode');
+const { generateAvailabilityForAllBillboards } = require('./availabilityController');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
 // Get all superadmins (only accessible by superadmin role)
 exports.getAllSuperAdmins = async (req, res) => {
   try {
+    const MASTER_DEVELOPER_EMAIL = 'srinnivassh@gmail.com';
+    if (req.user.email !== MASTER_DEVELOPER_EMAIL) {
+      return res.status(403).json({ error: 'Unauthorized. Only the Master Developer can manage accounts.' });
+    }
+
     const superadmins = await prisma.publisher.findMany({
       select: {
         id: true,
@@ -70,14 +76,21 @@ exports.getSuperAdminProfile = async (req, res) => {
 exports.createSuperAdmin = async (req, res) => {
   const { email, password, fullName, phoneNumber, role = 'manager', permissions = {} } = req.body;
 
+  const MASTER_DEVELOPER_EMAIL = 'srinnivassh@gmail.com';
+  const currentUser = req.user;
+
   // Validate required fields
   if (!email || !password || !fullName) {
     return res.status(400).json({ error: 'Email, password, and full name are required' });
   }
 
-  // Validate role (only superadmin can create managers/support)
+  // Role creation restrictions
+  const isMasterDeveloper = currentUser?.email === MASTER_DEVELOPER_EMAIL;
+  
+  if (!isMasterDeveloper) {
     if (role === 'superadmin' || role === 'developer') {
-      return res.status(403).json({ error: 'Cannot create superadmin or developer accounts' });
+      return res.status(403).json({ error: 'Only the Master Developer can create superadmin or developer accounts' });
+    }
   }
 
   try {
@@ -142,9 +155,12 @@ exports.updateSuperAdmin = async (req, res) => {
       return res.status(404).json({ error: 'Superadmin not found' });
     }
 
-    // Prevent role change to superadmin
-    if (role === 'superadmin' || role === 'developer') {
-      return res.status(403).json({ error: 'Cannot change role to superadmin or developer' });
+    // Prevent role change to superadmin/developer for non-master
+    const MASTER_DEVELOPER_EMAIL = 'srinnivassh@gmail.com';
+    const isMasterDeveloper = req.user?.email === MASTER_DEVELOPER_EMAIL;
+
+    if (!isMasterDeveloper && (role === 'superadmin' || role === 'developer' || existingSuperadmin.role === 'superadmin' || existingSuperadmin.role === 'developer')) {
+      return res.status(403).json({ error: 'Only the Master Developer can modify superadmin or developer accounts' });
     }
 
     // Update superadmin
@@ -240,9 +256,14 @@ exports.deleteSuperAdmin = async (req, res) => {
       return res.status(404).json({ error: 'Superadmin not found' });
     }
 
-    // Prevent deletion of superadmin role
+    // Prevent deletion of superadmin/developer by non-master
+    const MASTER_DEVELOPER_EMAIL = 'srinnivassh@gmail.com';
+    const isMasterDeveloper = req.user?.email === MASTER_DEVELOPER_EMAIL;
+
     if (superadmin.role === 'superadmin' || superadmin.role === 'developer') {
-      return res.status(403).json({ error: 'Cannot delete superadmin or developer accounts' });
+      if (!isMasterDeveloper) {
+        return res.status(403).json({ error: 'Only the Master Developer can delete superadmin or developer accounts' });
+      }
     }
 
     // Soft delete by setting status to inactive
@@ -393,6 +414,73 @@ exports.updateDeveloperMode = async (req, res) => {
   } catch (error) {
     logger.error('Error updating developer mode:', error);
     res.status(500).json({ error: 'Failed to update developer mode' });
+  }
+};
+
+exports.clearCampaignsAndSlots = async (req, res) => {
+  try {
+    const MASTER_DEVELOPER_EMAIL = 'srinnivassh@gmail.com';
+    const isMasterDeveloper = req.user?.email === MASTER_DEVELOPER_EMAIL;
+
+    // Additional restriction: maybe only Master Developer or explicit developer role.
+    if (!isMasterDeveloper && req.user?.role !== 'developer') {
+      return res.status(403).json({ error: 'Unauthorized to perform system reset' });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Delete generated slots and asset play logs
+      await tx.generatedSlot.deleteMany();
+      await tx.assetPlayLog.deleteMany();
+      await tx.assetPlay.deleteMany();
+      
+      // 2. Delete daily schedules and slots
+      await tx.dailySlot.deleteMany();
+      await tx.dailySchedule.deleteMany();
+      
+      // 3. Delete billboard bookings
+      await tx.billboard_bookings.deleteMany();
+      
+      // 4. Delete campaigns
+      await tx.campaign.deleteMany();
+
+      // 5. Delete billboard availability details (to cleanly rebuild them)
+      await tx.billboardAvailability.deleteMany();
+      await tx.slot_availability.deleteMany();
+    });
+
+    // 6. Regenerate availability for all billboards using the central controller
+    // This will rebuild `billboardAvailability`, `slot_availability`, and `billboard.slotAvailability` JSON
+    try {
+      await generateAvailabilityForAllBillboards(3); // Reset for 3 months
+      logger.info('Billboard slot availability regenerated successfully.');
+    } catch (availabilityErr) {
+      logger.error('Error regenerating billboard availability during reset:', availabilityErr);
+    }
+
+    // 7. Push new empty playlist to all connected Android players
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        const { getPlaylistForScreen } = require('../utils/socketHelpers');
+        const billboards = await prisma.billboard.findMany({ select: { screen_id: true } });
+        for (const bb of billboards) {
+          if (bb.screen_id) {
+            const { playlist, assets, date } = await getPlaylistForScreen(bb.screen_id);
+            io.to(`screen:${bb.screen_id}`).emit('playlist', { screenId: bb.screen_id, playlist, date });
+            io.to(`screen:${bb.screen_id}`).emit('assets', { screenId: bb.screen_id, assets });
+          }
+        }
+        logger.info('Broadcasted new playlist to all connected screens.');
+      }
+    } catch (socketErr) {
+      logger.error('Error broadcasting playlist reset to screens:', socketErr);
+    }
+
+    logger.info('System reset: all campaigns and slots cleared', { user: req.user?.email });
+    res.json({ message: 'All campaigns and slots have been cleared successfully.' });
+  } catch (error) {
+    logger.error('Error clearing campaigns and slots:', error);
+    res.status(500).json({ error: 'Failed to clear campaigns and slots' });
   }
 };
 

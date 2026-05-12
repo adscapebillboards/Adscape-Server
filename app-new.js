@@ -52,6 +52,7 @@ const notificationsRoutes = require('./routes/notifications');
 const pushRoutes = require('./routes/push');
 const partnersRoutes = require('./routes/partners');
 const serverLogsRoutes = require('./routes/serverLogs');
+const devStatusRoutes = require('./routes/devStatus');
 const path = require('path');
 const fs = require('fs');
 const playerRoutes = require('./routes/players');
@@ -376,6 +377,7 @@ app.use('/api', publisherDashboardRoutes);
 app.use('/api', superadminRoutes);
 // Developer/Superadmin log viewer routes
 app.use('/api', serverLogsRoutes);
+app.use('/api', devStatusRoutes);
 
 // Setup routes
 app.use('/api', setupRoutes);

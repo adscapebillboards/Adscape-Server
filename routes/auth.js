@@ -467,7 +467,7 @@ router.post('/publishers/login', async (req, res) => {
       });
     }
 
-    const token = jwt.sign({ id: publisher.id, email: publisher.email, role: 'publisher' }, JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ id: publisher.id, email: publisher.email, role: publisher.role || 'publisher' }, JWT_SECRET, { expiresIn: '30d' });
     const kycCompleted = isPublisherKycComplete(publisher);
 
     res.json({
@@ -475,10 +475,11 @@ router.post('/publishers/login', async (req, res) => {
       user: {
         id: publisher.id,
         email: publisher.email,
-        name: publisher.name,
-        phone: publisher.phone,
+        name: publisher.name || publisher.fullName,
+        phone: publisher.phone || publisher.phoneNumber,
         location: publisher.location,
-        role: 'publisher',
+        role: publisher.role || 'publisher',
+        permissions: publisher.permissions || {},
         kycCompleted,
         kycRequired: !kycCompleted
       }

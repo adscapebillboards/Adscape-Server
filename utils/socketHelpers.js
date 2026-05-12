@@ -98,7 +98,20 @@ async function getPlaylistForScreen(screenId) {
                 where: { scheduleId: schedule.id }
             });
 
-            if (existingSlotCount === 0) {
+            // Count how many existing slots are actually assigned to campaigns
+            const assignedSlotCount = await prisma.dailySlot.count({
+                where: { scheduleId: schedule.id, campaignId: { not: null } }
+            });
+
+            const needsGeneration   = existingSlotCount === 0;
+            const needsRegeneration = existingSlotCount > 0 && assignedSlotCount === 0 && activeCampaigns.length > 0;
+
+            if (needsGeneration || needsRegeneration) {
+                if (needsRegeneration) {
+                    await prisma.dailySlot.deleteMany({ where: { scheduleId: schedule.id } });
+                    console.log(`[SOCKET_HELPER] Deleted ${existingSlotCount} stale default-only slots. Regenerating with ${activeCampaigns.length} campaign(s).`);
+                }
+
                 const slotsData = [];
                 let rrIndex = 0;
                 for (let i = 1; i <= 8; i++) {
@@ -108,18 +121,22 @@ async function getPlaylistForScreen(screenId) {
                     if (activeCampaigns.length > 0) {
                         const campaign = activeCampaigns[rrIndex];
                         rrIndex = (rrIndex + 1) % activeCampaigns.length;
-                        campaignId = campaign.id;
 
                         const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
-                        const bb = bbs.find(b => {
+                        const bb = bbs && bbs.find(b => {
                             const bId = String(b.id || b.billboardId || "");
                             const bSid = String(b.screen_id || b.screenId || "");
                             return billboardIds.includes(bId) || billboardIds.includes(bSid);
                         });
 
                         if (bb) {
-                            assetUrl = (bb.files && bb.files.length > 0) ? bb.files[0] : (bb.creative || bb.images?.[0] || defaultUrl);
+                            campaignId = campaign.id;
+                            // Prefer uploaded files > creative field > images array > default
+                            assetUrl = (bb.files && bb.files.length > 0)
+                                ? bb.files[0]
+                                : (bb.creative || (bb.images && bb.images.length > 0 ? bb.images[0] : null) || defaultUrl);
                         }
+                        // If bb not found, this campaign doesn't match this screen — keep null
                     }
 
                     slotsData.push({
@@ -133,9 +150,9 @@ async function getPlaylistForScreen(screenId) {
                     });
                 }
                 await prisma.dailySlot.createMany({ data: slotsData });
-                console.log(`[SOCKET_HELPER] Created ${slotsData.length} slots`);
+                console.log(`[SOCKET_HELPER] Created ${slotsData.length} slots. Assigned: ${slotsData.filter(s => s.campaignId).length}`);
             } else {
-                console.log(`[SOCKET_HELPER] Schedule ${schedule.id} already has ${existingSlotCount} slots. Skipping slot generation.`);
+                console.log(`[SOCKET_HELPER] Schedule ${schedule.id} has ${existingSlotCount} slots (${assignedSlotCount} assigned). No regeneration needed.`);
             }
         }
 
