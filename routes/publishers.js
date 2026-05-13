@@ -406,7 +406,8 @@ router.post('/google/login', async (req, res) => {
     }
     const token = jwt.sign({ id: publisher.id, email: publisher.email, role }, JWT_SECRET, { expiresIn: '30d' });
 
-    console.log('Publisher logged in successfully:', { id: publisher.id, email: publisher.email });
+    const kycCompleted = isPublisherKycComplete(publisher);
+    console.log('Publisher logged in successfully:', { id: publisher.id, email: publisher.email, kycCompleted });
     res.json({
       token,
       user: {
@@ -415,7 +416,16 @@ router.post('/google/login', async (req, res) => {
         name: publisher.name,
         phone: publisher.phone,
         location: publisher.location,
-        role
+        role,
+        companyName: publisher.companyName,
+        businessType: publisher.businessType,
+        address: publisher.address,
+        city: publisher.city,
+        state: publisher.state,
+        pincode: publisher.pincode,
+        website: publisher.website,
+        kycCompleted,
+        kycRequired: !kycCompleted
       },
       partner: partnerRow ? {
         id: partnerRow.id,

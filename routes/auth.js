@@ -479,6 +479,13 @@ router.post('/publishers/login', async (req, res) => {
         phone: publisher.phone || publisher.phoneNumber,
         location: publisher.location,
         role: publisher.role || 'publisher',
+        companyName: publisher.companyName,
+        businessType: publisher.businessType,
+        address: publisher.address,
+        city: publisher.city,
+        state: publisher.state,
+        pincode: publisher.pincode,
+        website: publisher.website,
         permissions: publisher.permissions || {},
         kycCompleted,
         kycRequired: !kycCompleted
