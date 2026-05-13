@@ -39,7 +39,8 @@ function enumerateDateKeys(startDate, endDate) {
 }
 
 function findFirstAvailableSlot(occupiedSlots, maxSlotsPerDay) {
-  for (let slotNumber = 1; slotNumber <= maxSlotsPerDay; slotNumber += 1) {
+  const limit = Math.min(maxSlotsPerDay, 8);
+  for (let slotNumber = 1; slotNumber <= limit; slotNumber += 1) {
     if (!occupiedSlots.has(slotNumber)) {
       return slotNumber;
     }

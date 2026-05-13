@@ -126,26 +126,51 @@ exports.getSchedule = async (req, res) => {
             const slotsData = [];
             let rrIndex = 0;
 
-            const defaultAsset = await prisma.defaultAsset.findFirst({ where: { isActive: true } });
-            const defaultUrl = defaultAsset ? defaultAsset.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+            const globalDefault = await prisma.defaultAsset.findFirst({
+                where: { isActive: true },
+                orderBy: { updatedAt: 'desc' }
+            });
+            const globalUrl = globalDefault ? globalDefault.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+            const globalDuration = globalDefault ? globalDefault.duration : 15;
 
-            for (let i = 1; i <= 8; i++) {
+            for (let i = 1; i <= 10; i++) {
                 let campaign = null;
-                let assetUrl = defaultUrl;
+                let assetUrl = globalUrl;
+                let durationSec = globalDuration;
 
-                if (activeCampaigns.length > 0) {
-                    campaign = activeCampaigns[rrIndex];
-                    rrIndex = (rrIndex + 1) % activeCampaigns.length;
+                if (i <= 8) {
+                    // Rotation slots 1-8
+                    if (activeCampaigns.length > 0) {
+                        campaign = activeCampaigns[rrIndex];
+                        rrIndex = (rrIndex + 1) % activeCampaigns.length;
 
-                    const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
-                    const bb = bbs.find(b => String(b.id) === String(screenId) || String(b.screen_id) === String(screenId));
-                    if (bb) {
-                        assetUrl =
-                            (bb.files && bb.files.length > 0) ? bb.files[0] :
+                        const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
+                        const bb = bbs.find(b => {
+                            const bId = String(b.id || b.billboardId || "");
+                            const bSid = String(b.screen_id || b.screenId || "");
+                            return billboardIds.includes(bId) || billboardIds.includes(bSid);
+                        });
+
+                        if (bb) {
+                            assetUrl = (bb.files && bb.files.length > 0) ? bb.files[0] :
                                 (bb.creative) ? bb.creative :
                                     (bb.images && bb.images.length > 0) ? bb.images[0] :
                                         (billboard && billboard.images && billboard.images.length > 0) ? billboard.images[0] :
-                                            defaultUrl;
+                                            globalUrl;
+                        }
+                    }
+                } else if (i === 9) {
+                    // Slot 9: Global Default Asset
+                    assetUrl = globalUrl;
+                    durationSec = globalDuration;
+                } else if (i === 10) {
+                    // Slot 10: Billboard Slot 10 or Global Default
+                    if (billboard && billboard.slot10Enabled && billboard.slot10AssetUrl) {
+                        assetUrl = billboard.slot10AssetUrl;
+                        durationSec = billboard.slot10AssetDuration || 15;
+                    } else {
+                        assetUrl = globalUrl;
+                        durationSec = globalDuration;
                     }
                 }
 
@@ -154,7 +179,7 @@ exports.getSchedule = async (req, res) => {
                     slotNumber: i,
                     campaignId: campaign ? campaign.id : null,
                     assetUrl: assetUrl,
-                    durationSec: 15,
+                    durationSec: durationSec,
                     slotStart: new Date(),
                     slotEnd: new Date()
                 });
@@ -163,10 +188,82 @@ exports.getSchedule = async (req, res) => {
             await prisma.dailySlot.createMany({ data: slotsData });
         }
 
-        const slots = await prisma.dailySlot.findMany({
+        let slots = await prisma.dailySlot.findMany({
             where: { scheduleId: schedule.id },
             orderBy: { slotNumber: 'asc' }
         });
+
+        // RECONCILIATION: Ensure Slot 9 and 10 exist
+        const currentSlotNumbers = slots.map(s => s.slotNumber);
+        const globalDefault = await prisma.defaultAsset.findFirst({
+            where: { isActive: true },
+            orderBy: { updatedAt: 'desc' }
+        });
+        const globalUrl = globalDefault ? globalDefault.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+        const globalDuration = globalDefault ? globalDefault.duration : 15;
+
+        // Slot 9: Prioritize Billboard Specific Default, fallback to Global
+        const s9Url = (billboard && billboard.defaultAssetUrl) ? billboard.defaultAssetUrl : globalUrl;
+        const s9Dur = (billboard && billboard.defaultAssetDuration) ? billboard.defaultAssetDuration : globalDuration;
+
+        let needsRefresh = false;
+        // Force Slot 9 to match current configuration
+        const slot9 = slots.find(s => s.slotNumber === 9);
+        if (slot9) {
+            if (slot9.assetUrl !== s9Url || slot9.campaignId !== null || slot9.durationSec !== s9Dur) {
+                await prisma.dailySlot.update({
+                    where: { id: slot9.id },
+                    data: { assetUrl: s9Url, campaignId: null, durationSec: s9Dur }
+                });
+                needsRefresh = true;
+            }
+        } else {
+            await prisma.dailySlot.create({
+                data: {
+                    scheduleId: schedule.id,
+                    slotNumber: 9,
+                    assetUrl: s9Url,
+                    durationSec: s9Dur,
+                    slotStart: new Date(),
+                    slotEnd: new Date()
+                }
+            });
+            needsRefresh = true;
+        }
+
+        // Slot 10: Prioritize Billboard Specific Slot 10, fallback to Slot 9
+        const slot10 = slots.find(s => s.slotNumber === 10);
+        const s10Url = (billboard && billboard.slot10Enabled && billboard.slot10AssetUrl) ? billboard.slot10AssetUrl : s9Url;
+        const s10Dur = (billboard && billboard.slot10Enabled && billboard.slot10AssetDuration) ? billboard.slot10AssetDuration : s9Dur;
+
+        if (slot10) {
+            if (slot10.assetUrl !== s10Url || slot10.durationSec !== s10Dur) {
+                await prisma.dailySlot.update({
+                    where: { id: slot10.id },
+                    data: { assetUrl: s10Url, durationSec: s10Dur, campaignId: null }
+                });
+                needsRefresh = true;
+            }
+        } else {
+            await prisma.dailySlot.create({
+                data: {
+                    scheduleId: schedule.id,
+                    slotNumber: 10,
+                    assetUrl: s10Url,
+                    durationSec: s10Dur,
+                    slotStart: new Date(),
+                    slotEnd: new Date()
+                }
+            });
+            needsRefresh = true;
+        }
+
+        if (needsRefresh) {
+            slots = await prisma.dailySlot.findMany({
+                where: { scheduleId: schedule.id },
+                orderBy: { slotNumber: 'asc' }
+            });
+        }
 
         // FIX: If any slots are using the default logo but the campaign now has real files, update them!
         const defaultLogo = 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';

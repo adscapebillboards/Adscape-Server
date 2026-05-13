@@ -413,6 +413,19 @@ exports.updateBillboardPlayerDefaults = async (req, res) => {
     if (slot10Enabled !== undefined) data.slot10Enabled = slot10Enabled;
 
     const updated = await prisma.billboard.update({ where: { id }, data });
+
+    // Broadcast playlist update to the player if connected
+    const screenId = updated.screen_id;
+    if (screenId) {
+      const { getPlaylistForScreen } = require('../utils/socketHelpers');
+      const { playlist, date } = await getPlaylistForScreen(screenId);
+      const io = req.app.get('io');
+      if (io) {
+        io.to(screenId).emit('playlist', { screenId, playlist, date });
+        console.log(`[BILLBOARD_CONTROLLER] Broadcasted updated playlist to screen: ${screenId}`);
+      }
+    }
+
     res.json({ success: true, billboard: toApiBillboard(updated) });
   } catch (err) {
     logger.error('updateBillboardPlayerDefaults error', { id, error: err.message });

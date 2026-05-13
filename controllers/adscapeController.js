@@ -1,5 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { cascadeScreenIdUpdate } = require('../utils/billboardCascade');
 
 /**
  * Register or update an Adscape player
@@ -156,25 +157,58 @@ exports.updateFlowType = async (req, res) => {
 };
 
 /**
- * Delete a player
+ * Delete a player and all its associated data
  * DELETE /api/adscape/player/:screenId
  */
 exports.deletePlayer = async (req, res) => {
     try {
         const { screenId } = req.params;
-        logger.info('[ADSCAPE] Deleting player:', screenId);
+        logger.info('[ADSCAPE] Performing full data purge for player:', screenId);
         
-        await prisma.adscapePlayer.delete({
-            where: { screenId }
+        // Perform cleanup while PRESERVING analytics and playback history
+        await prisma.$transaction(async (tx) => {
+            // Find billboards linked to this screen first
+            const billboards = await tx.billboard.findMany({
+                where: { screen_id: screenId },
+                select: { id: true }
+            });
+
+            // 1. Unlink from any Billboards
+            await tx.billboard.updateMany({
+                where: { screen_id: screenId },
+                data: { screen_id: null }
+            });
+
+            // 2. Cascade clearing to GeneratedSlot (screenId array will now have empty string at that index)
+            for (const bb of billboards) {
+                await cascadeScreenIdUpdate(bb.id, screenId, null, tx);
+            }
+
+            // 3. Clear Daily Schedules (DailySlots will cascade delete)
+            await tx.dailySchedule.deleteMany({
+                where: { screenId }
+            });
+
+            // 4. Clear the legacy PlayerScreen record if it exists
+            await tx.playerScreen.deleteMany({
+                where: { screenId }
+            });
+
+            // 5. Finally, remove the AdscapePlayer registration
+            await tx.adscapePlayer.deleteMany({
+                where: { screenId }
+            });
         });
+        
+        logger.info('[ADSCAPE] Player registration and schedules cleared. Analytics preserved for:', screenId);
         
         res.json({ 
             success: true, 
-            message: 'Player deleted successfully' 
+            message: 'Player and all associated analytics/schedule data deleted successfully' 
         });
     } catch (error) {
-        logger.error('[ADSCAPE] Delete player error:', error);
-        res.status(500).json({ error: 'Failed to delete player' });
+        logger.error('[ADSCAPE] Comprehensive delete player error:', error);
+        res.status(500).json({ error: 'Failed to completely purge player data' });
     }
 };
 

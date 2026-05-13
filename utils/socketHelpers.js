@@ -23,7 +23,10 @@ async function getPlaylistForScreen(screenId) {
 
         const scheduleDate = new Date(todayIST);
 
-        const defaultAsset = await prisma.defaultAsset.findFirst({ where: { isActive: true } });
+        const defaultAsset = await prisma.defaultAsset.findFirst({
+            where: { isActive: true },
+            orderBy: { updatedAt: 'desc' }
+        });
         const defaultUrl = defaultAsset ? defaultAsset.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
 
         const billboard = await prisma.billboard.findFirst({
@@ -115,29 +118,53 @@ async function getPlaylistForScreen(screenId) {
 
                 const slotsData = [];
                 let rrIndex = 0;
-                for (let i = 1; i <= 8; i++) {
+
+                // Global Default Asset Config
+                const globalDefault = await prisma.defaultAsset.findFirst({
+                    where: { isActive: true },
+                    orderBy: { updatedAt: 'desc' }
+                });
+                const globalUrl = globalDefault ? globalDefault.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+                const globalDuration = globalDefault ? globalDefault.duration : 15;
+
+                for (let i = 1; i <= 10; i++) {
                     let campaignId = null;
-                    let assetUrl = defaultUrl;
+                    let assetUrl = globalUrl;
+                    let durationSec = globalDuration;
 
-                    if (activeCampaigns.length > 0) {
-                        const campaign = activeCampaigns[rrIndex];
-                        rrIndex = (rrIndex + 1) % activeCampaigns.length;
+                    if (i <= 8) {
+                        // Rotation slots 1-8
+                        if (activeCampaigns.length > 0) {
+                            const campaign = activeCampaigns[rrIndex];
+                            rrIndex = (rrIndex + 1) % activeCampaigns.length;
 
-                        const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
-                        const bb = bbs && bbs.find(b => {
-                            const bId = String(b.id || b.billboardId || "");
-                            const bSid = String(b.screen_id || b.screenId || "");
-                            return billboardIds.includes(bId) || billboardIds.includes(bSid);
-                        });
+                            const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
+                            const bb = bbs && bbs.find(b => {
+                                const bId = String(b.id || b.billboardId || "");
+                                const bSid = String(b.screen_id || b.screenId || "");
+                                return billboardIds.includes(bId) || billboardIds.includes(bSid);
+                            });
 
-                        if (bb) {
-                            campaignId = campaign.id;
-                            // Prefer uploaded files > creative field > images array > default
-                            assetUrl = (bb.files && bb.files.length > 0)
-                                ? bb.files[0]
-                                : (bb.creative || (bb.images && bb.images.length > 0 ? bb.images[0] : null) || defaultUrl);
+                            if (bb) {
+                                campaignId = campaign.id;
+                                assetUrl = (bb.files && bb.files.length > 0)
+                                    ? bb.files[0]
+                                    : (bb.creative || (bb.images && bb.images.length > 0 ? bb.images[0] : null) || globalUrl);
+                            }
                         }
-                        // If bb not found, this campaign doesn't match this screen — keep null
+                    } else if (i === 9) {
+                        // Slot 9: Global Default Asset (configured in admin panel)
+                        assetUrl = globalUrl;
+                        durationSec = globalDuration;
+                    } else if (i === 10) {
+                        // Slot 10: Extra slot for billboard or global fallback
+                        if (billboard && billboard.slot10Enabled && billboard.slot10AssetUrl) {
+                            assetUrl = billboard.slot10AssetUrl;
+                            durationSec = billboard.slot10AssetDuration || 15;
+                        } else {
+                            assetUrl = globalUrl;
+                            durationSec = globalDuration;
+                        }
                     }
 
                     slotsData.push({
@@ -145,7 +172,7 @@ async function getPlaylistForScreen(screenId) {
                         slotNumber: i,
                         campaignId: campaignId,
                         assetUrl: assetUrl,
-                        durationSec: 15,
+                        durationSec: durationSec,
                         slotStart: new Date(),
                         slotEnd: new Date()
                     });
@@ -162,6 +189,83 @@ async function getPlaylistForScreen(screenId) {
             where: { scheduleId: schedule.id },
             orderBy: { slotNumber: 'asc' }
         });
+
+        // RECONCILIATION: Ensure Slot 9 and 10 exist and Slot 9 matches Default (Billboard Specific or Global)
+        const globalDefault = await prisma.defaultAsset.findFirst({
+            where: { isActive: true },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        const globalUrl = globalDefault ? globalDefault.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+        const globalDuration = globalDefault ? globalDefault.duration : 15;
+
+        // Slot 9: Prioritize Billboard Specific Default, fallback to Global
+        const s9Url = (billboard && billboard.defaultAssetUrl) ? billboard.defaultAssetUrl : globalUrl;
+        const s9Dur = (billboard && billboard.defaultAssetDuration) ? billboard.defaultAssetDuration : globalDuration;
+
+        let needsRefresh = false;
+
+        // Force Slot 9 to match current configuration
+        const slot9 = slots.find(s => s.slotNumber === 9);
+        if (slot9) {
+            if (slot9.assetUrl !== s9Url || slot9.campaignId !== null || slot9.durationSec !== s9Dur) {
+                await prisma.dailySlot.update({
+                    where: { id: slot9.id },
+                    data: { assetUrl: s9Url, campaignId: null, durationSec: s9Dur }
+                });
+                needsRefresh = true;
+                slot9.assetUrl = s9Url;
+                slot9.durationSec = s9Dur;
+                slot9.campaignId = null;
+            }
+        } else {
+            await prisma.dailySlot.create({
+                data: {
+                    scheduleId: schedule.id,
+                    slotNumber: 9,
+                    assetUrl: s9Url,
+                    durationSec: s9Dur,
+                    slotStart: scheduleDate,
+                    slotEnd: new Date(scheduleDate.getTime() + 24 * 60 * 60 * 1000)
+                }
+            });
+            needsRefresh = true;
+        }
+
+        // Slot 10: Prioritize Billboard Specific Slot 10, fallback to Slot 9 (which is Billboard or Global)
+        const slot10 = slots.find(s => s.slotNumber === 10);
+        const s10Url = (billboard && billboard.slot10Enabled && billboard.slot10AssetUrl) ? billboard.slot10AssetUrl : s9Url;
+        const s10Dur = (billboard && billboard.slot10Enabled && billboard.slot10AssetDuration) ? billboard.slot10AssetDuration : s9Dur;
+
+        if (slot10) {
+            if (slot10.assetUrl !== s10Url || slot10.durationSec !== s10Dur) {
+                await prisma.dailySlot.update({
+                    where: { id: slot10.id },
+                    data: { assetUrl: s10Url, durationSec: s10Dur, campaignId: null }
+                });
+                needsRefresh = true;
+            }
+        } else {
+            await prisma.dailySlot.create({
+                data: {
+                    scheduleId: schedule.id,
+                    slotNumber: 10,
+                    assetUrl: s10Url,
+                    durationSec: s10Dur,
+                    slotStart: new Date(),
+                    slotEnd: new Date()
+                }
+            });
+            needsRefresh = true;
+        }
+
+        if (needsRefresh) {
+            slots = await prisma.dailySlot.findMany({
+                where: { scheduleId: schedule.id },
+                orderBy: { slotNumber: 'asc' }
+            });
+        }
+
         console.log(`[SOCKET_HELPER] Initialized ${slots.length} slots for schedule ${schedule.id}`);
 
         // 4. Dynamic Asset Update for logo placeholders

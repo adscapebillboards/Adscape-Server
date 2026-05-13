@@ -122,14 +122,21 @@ io.on('connection', (socket) => {
                 });
 
                 if (billboard) {
-                    const defaultImage = (billboard.images && billboard.images.length > 0) ? billboard.images[0] : null;
+                    // Resolve correct default asset (Billboard Specific or Global)
+                    const globalDefault = await prisma.defaultAsset.findFirst({
+                        where: { isActive: true },
+                        orderBy: { updatedAt: 'desc' }
+                    });
+                    const globalUrl = globalDefault ? globalDefault.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+                    const defaultAssetUrl = billboard.defaultAssetUrl || globalUrl;
+
                     socket.emit('billboard-details', {
                         name: billboard.name,
                         location: billboard.location,
                         city: billboard.city,
-                        defaultImage: defaultImage
+                        defaultImage: defaultAssetUrl
                     });
-                    console.log(`[SOCKET] Emitted billboard-details for screen: ${screenId}`);
+                    console.log(`[SOCKET] Emitted billboard-details for screen: ${screenId}. Default: ${defaultAssetUrl}`);
                 }
 
                 // Emit playlist and assets automatically on join

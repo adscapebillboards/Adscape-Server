@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { cascadeScreenIdUpdate } = require('../utils/billboardCascade');
 
 // Delete billboard
 router.delete('/:id', async (req, res) => {
@@ -69,17 +70,28 @@ router.patch('/:id/connect', async (req, res) => {
     // Resolve logical hardware screenId
     const targetScreenId = player ? player.screenId : normalizedCode;
 
-    await prisma.billboard.updateMany({
-      where: {
-        screen_id: targetScreenId,
-        NOT: { id }
-      },
-      data: { screen_id: null }
-    });
+    let billboard;
+    await prisma.$transaction(async (tx) => {
+      const oldBillboard = await tx.billboard.findUnique({
+        where: { id },
+        select: { screen_id: true }
+      });
 
-    const billboard = await prisma.billboard.update({
-      where: { id },
-      data: { screen_id: targetScreenId }
+      await tx.billboard.updateMany({
+        where: {
+          screen_id: targetScreenId,
+          NOT: { id }
+        },
+        data: { screen_id: null }
+      });
+
+      billboard = await tx.billboard.update({
+        where: { id },
+        data: { screen_id: targetScreenId }
+      });
+
+      // Cascade the update to generated slots and schedules
+      await cascadeScreenIdUpdate(id, oldBillboard?.screen_id, targetScreenId, tx);
     });
 
     logger.billboard('Screen connected', `Billboard ID: ${id}, Screen ID: ${targetScreenId}`);
@@ -98,9 +110,20 @@ router.patch('/:id/disconnect', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const billboard = await prisma.billboard.update({
-      where: { id },
-      data: { screen_id: null }
+    let billboard;
+    await prisma.$transaction(async (tx) => {
+      const oldBillboard = await tx.billboard.findUnique({
+        where: { id },
+        select: { screen_id: true }
+      });
+
+      billboard = await tx.billboard.update({
+        where: { id },
+        data: { screen_id: null }
+      });
+
+      // Cascade the update to generated slots and schedules (new screen ID is null)
+      await cascadeScreenIdUpdate(id, oldBillboard?.screen_id, null, tx);
     });
 
     logger.billboard('Screen disconnected', `Billboard ID: ${id}`);

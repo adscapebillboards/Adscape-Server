@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { registerPlayer, updatePlayerStatus, getPlayerStatus, getAllPlayersStatus, getPlayerScreenByBillboardId } = require('../controllers/playerController');
-const { getDefaultAsset, createDefaultAsset, updateDefaultAsset, deleteDefaultAsset, checkDefaultAssetUpdate } = require('../controllers/defaultAssetController');
+const { getDefaultAsset, createDefaultAsset, updateDefaultAsset, deleteDefaultAsset, checkDefaultAssetUpdate, overwriteAllBillboardsWithGlobalDefault } = require('../controllers/defaultAssetController');
 const { getPlaylistForScreen } = require('../utils/socketHelpers');
 
 // Player routes
@@ -15,6 +15,7 @@ router.get('/players/screen/:billboardId', getPlayerScreenByBillboardId);
 router.get('/default-asset', getDefaultAsset);
 router.get('/default-asset/check-update', checkDefaultAssetUpdate);
 router.post('/default-asset', createDefaultAsset);
+router.post('/default-asset/overwrite-all', overwriteAllBillboardsWithGlobalDefault);
 router.put('/default-asset/:id', updateDefaultAsset);
 router.delete('/default-asset/:id', deleteDefaultAsset);
 
@@ -68,7 +69,7 @@ router.get('/screens/:screenId/current-asset', async (req, res) => {
             }
         }
 
-        const isVideo = /\\.mp4$/i.test(currentSlot.assetUrl || '');
+        const isVideo = /\.mp4$/i.test(currentSlot.assetUrl || '');
         res.json({
             screenId,
             asset: {
