@@ -40,6 +40,34 @@ router.get('/screens/:screenId/player-online', (req, res) => {
 });
 
 /**
+ * GET /api/screens/online-map
+ * Returns a map of screenId -> online socket presence (realtime).
+ * Intended for admin dashboards to avoid N+1 calls.
+ */
+router.get('/screens/online-map', (req, res) => {
+    try {
+        const io = req.app.get('io');
+        if (!io) return res.json({ screens: {}, reason: 'io_unavailable' });
+
+        const rooms = io.sockets.adapter.rooms;
+        const screens = {};
+
+        // Rooms are like: `screen:<screenId>`; each contains player sockets.
+        for (const [roomName, members] of rooms.entries()) {
+            if (!roomName || typeof roomName !== 'string') continue;
+            if (!roomName.startsWith('screen:')) continue;
+            const screenId = roomName.slice('screen:'.length);
+            if (!screenId) continue;
+            screens[screenId] = { online: members && members.size > 0, sockets: members ? members.size : 0 };
+        }
+
+        res.json({ screens });
+    } catch (err) {
+        res.status(500).json({ screens: {}, error: err.message });
+    }
+});
+
+/**
  * GET /api/screens/:screenId/current-asset
  * Returns the currently-scheduled asset for a screen based on today's playlist.
  * Client uses this as a REST fallback when the socket live-feed is unavailable.
