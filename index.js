@@ -131,6 +131,7 @@ io.on('connection', (socket) => {
                     const defaultAssetUrl = billboard.defaultAssetUrl || globalUrl;
 
                     socket.emit('billboard-details', {
+                        screenId,
                         name: billboard.name,
                         location: billboard.location,
                         city: billboard.city,
