@@ -223,7 +223,8 @@ exports.addBillboard = async (req, res) => {
       images: bodyImages, latitude, longitude, userId, adDuration,
       opening_time, closing_time, max_advertisers, maxAdvertiseDuration,
       auto_brightness, board_format, audio_output, video: bodyVideo,
-      resolution, description, name, reasons
+      resolution, description, name, reasons,
+      bulk_discount_enabled, bulk_discount_percent, bulk_discount_threshold_days
     } = req.body;
 
     // ── Upload files from multipart request to Cloudinary (signed, no preset needed) ──
@@ -298,7 +299,10 @@ exports.addBillboard = async (req, res) => {
         audioOutput: audio_output !== undefined ? Boolean(audio_output) : false,
         video: finalVideo,
         reason: Array.isArray(reasons) ? reasons : [],
-        status: 'PENDING'
+        status: 'PENDING',
+        bulkDiscountEnabled: bulk_discount_enabled !== undefined ? Boolean(bulk_discount_enabled) : false,
+        bulkDiscountPercent: bulk_discount_percent ? parseInt(bulk_discount_percent) : null,
+        bulkDiscountThresholdDays: bulk_discount_threshold_days ? parseInt(bulk_discount_threshold_days) : null
       }
     });
 
@@ -361,6 +365,11 @@ exports.updateBillboard = async (req, res) => {
     if ('longitude' in req.body) updateData.longitude = req.body.longitude ? parseFloat(req.body.longitude) : null;
     if ('adDuration' in req.body) updateData.adDuration = req.body.adDuration || null;
     if ('maxAdvertiseDuration' in req.body) updateData.maxAdvertiseDuration = req.body.maxAdvertiseDuration ? parseInt(req.body.maxAdvertiseDuration) : null;
+    
+    // Bulk Booking Discount fields
+    if ('bulkDiscountEnabled' in req.body) updateData.bulkDiscountEnabled = Boolean(req.body.bulkDiscountEnabled);
+    if ('bulkDiscountPercent' in req.body) updateData.bulkDiscountPercent = req.body.bulkDiscountPercent ? parseInt(req.body.bulkDiscountPercent) : null;
+    if ('bulkDiscountThresholdDays' in req.body) updateData.bulkDiscountThresholdDays = req.body.bulkDiscountThresholdDays ? parseInt(req.body.bulkDiscountThresholdDays) : null;
 
     // Log what we're actually updating
     logger.billboard('Billboard update data', `ID: ${id}`, {

@@ -117,6 +117,11 @@ model Billboard {
   defaultAssetType     String?   @map("default_asset_type") @db.VarChar(20)
   defaultAssetDuration Int?      @map("default_asset_duration") // seconds
 
+  // Bulk booking discount
+  bulkDiscountEnabled       Boolean   @default(false) @map("bulk_discount_enabled")
+  bulkDiscountPercent       Int?      @map("bulk_discount_percent")
+  bulkDiscountThresholdDays Int?      @map("bulk_discount_threshold_days")
+
   // Optional slot 10 (enabled by superadmin; asset uploaded by billboard owner)
   slot10Enabled        Boolean   @default(false) @map("slot10_enabled")
   slot10AssetUrl       String?   @map("slot10_asset_url") @db.VarChar(500)

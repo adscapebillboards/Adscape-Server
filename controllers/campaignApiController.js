@@ -91,10 +91,16 @@ const createCampaign = async (req, res) => {
 
     const campaignId = uuidv4();
 
+    const billboardIds = billboards.map(b => String((b.billboard || b).id || b.billboardId));
+    const dbBillboards = await prisma.billboard.findMany({
+      where: { id: { in: billboardIds } }
+    });
+    const dbBillboardsMap = new Map(dbBillboards.map(b => [String(b.id), b]));
+
     // Build billboard records WITHOUT waiting for file uploads — files: [] initially
     const enrichedBillboards = billboards.map((billboard) => {
       const billboardObj = billboard.billboard || billboard;
-      const id = billboardObj.id || billboard.billboardId || billboard.id;
+      const id = String(billboardObj.id || billboard.billboardId || billboard.id);
 
       let bookingDetails = billboard.bookingDetails || billboardObj.bookingDetails;
       if (!bookingDetails && (billboard.startDate || billboard.endDate)) {
@@ -105,20 +111,36 @@ const createCampaign = async (req, res) => {
         throw new Error('Invalid billboard data structure: missing id or bookingDetails');
       }
 
-      const { location, city, pricePerDay, owner } = billboardObj;
-      const screen_id = billboardObj.screen_id || billboardObj.screenId || billboard.screen_id || billboard.screenId || null;
+      const dbBillboard = dbBillboardsMap.get(id);
+      const { location, city, owner } = dbBillboard || billboardObj;
+      const pricePerDay = dbBillboard?.pricePerDay || billboardObj.pricePerDay || 0;
+      const screen_id = billboardObj.screen_id || billboardObj.screenId || billboard.screen_id || billboard.screenId || dbBillboard?.screenId || null;
       const { startDate, endDate } = bookingDetails;
 
-      const days = (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24) + 1;
-      const totalPrice = days * (pricePerDay || billboardObj.pricePerDay || 0);
+      const days = Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1;
+      let totalPrice = days * pricePerDay;
+
+      // Apply Bulk Booking Discount if applicable
+      let discountApplied = false;
+      let discountAmount = 0;
+      if (dbBillboard?.bulkDiscountEnabled && dbBillboard?.bulkDiscountPercent && dbBillboard?.bulkDiscountThresholdDays) {
+        if (days >= dbBillboard.bulkDiscountThresholdDays) {
+          const originalPrice = totalPrice;
+          totalPrice = originalPrice * (1 - (dbBillboard.bulkDiscountPercent / 100));
+          discountAmount = originalPrice - totalPrice;
+          discountApplied = true;
+        }
+      }
 
       const { getISTTimestamp } = require('../utils/timeUtils');
       return {
         id,
         location: location || billboardObj.location,
         city: city || billboardObj.city,
-        pricePerDay: pricePerDay || billboardObj.pricePerDay,
+        pricePerDay: pricePerDay,
         totalPrice,
+        discountApplied,
+        discountAmount,
         bookingDetails: { startDate, endDate },
         files: [], // Files will be attached asynchronously via /attach-file
         owner: owner || billboardObj.owner,
@@ -129,15 +151,16 @@ const createCampaign = async (req, res) => {
         endDate,
         billboardCampaignId: `${campaignId}_${id}`,
         ...billboardObj,
-        ...billboard
+        ...billboard,
+        // Ensure we don't overwrite the calculated price and discount
+        totalPrice,
+        discountApplied,
+        discountAmount
       };
     });
 
-    // Use provided totalAmount or calculate
-    const totalAmount = parseFloat(campaignData.totalAmount) || enrichedBillboards.reduce((sum, b) => {
-      const days = (new Date(b.bookingDetails.endDate) - new Date(b.bookingDetails.startDate)) / (1000 * 60 * 60 * 24) + 1;
-      return sum + (days * (b.pricePerDay || 0));
-    }, 0);
+    // Use provided totalAmount or calculate from enriched billboards
+    const totalAmount = parseFloat(campaignData.totalAmount) || enrichedBillboards.reduce((sum, b) => sum + (b.totalPrice || 0), 0);
 
     const startDate = enrichedBillboards[0]?.bookingDetails.startDate;
     const endDate = enrichedBillboards[0]?.bookingDetails.endDate;
