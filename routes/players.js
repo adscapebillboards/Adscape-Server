@@ -3,6 +3,8 @@ const router = express.Router();
 const { registerPlayer, updatePlayerStatus, getPlayerStatus, getAllPlayersStatus, getPlayerScreenByBillboardId } = require('../controllers/playerController');
 const { getDefaultAsset, createDefaultAsset, updateDefaultAsset, deleteDefaultAsset, checkDefaultAssetUpdate, overwriteAllBillboardsWithGlobalDefault } = require('../controllers/defaultAssetController');
 const { getPlaylistForScreen } = require('../utils/socketHelpers');
+const { resolveScreenContext, isPlayerOnlineInRooms, countViewersInRooms } = require('../utils/screenIdResolver');
+const playerRegistry = require('../services/playerConnectionRegistry');
 
 // Player routes
 router.post('/players/register', registerPlayer);
@@ -24,18 +26,95 @@ router.delete('/default-asset/:id', deleteDefaultAsset);
  * Returns whether the Android player for this screen currently has an active socket connection.
  * Used by the client to show "Player is offline" immediately rather than waiting for a timeout.
  */
-router.get('/screens/:screenId/player-online', (req, res) => {
+router.get('/screens/:screenId/player-online', async (req, res) => {
     try {
         const { screenId } = req.params;
         const io = req.app.get('io');
         if (!io) return res.json({ online: false, reason: 'io_unavailable' });
 
-        // Check if any socket is in the screen room
-        const room = io.sockets.adapter.rooms.get(`screen:${screenId}`);
-        const online = !!(room && room.size > 0);
-        res.json({ screenId, online, sockets: room ? room.size : 0 });
+        const { aliases, canonicalScreenId } = await resolveScreenContext(screenId);
+        const onlineInRooms = isPlayerOnlineInRooms(io, aliases);
+        const onlineInRegistry = playerRegistry.isOnline(aliases);
+        const online = onlineInRooms || onlineInRegistry;
+        let sockets = playerRegistry.countSockets(aliases);
+        if (sockets === 0) {
+            for (const id of aliases) {
+                const room = io.sockets.adapter.rooms.get(`screen:${id}`);
+                if (room) sockets += room.size;
+            }
+        }
+        res.json({
+            screenId,
+            canonicalScreenId,
+            aliases,
+            online,
+            sockets,
+            onlineInRooms,
+            onlineInRegistry,
+        });
     } catch (err) {
         res.status(500).json({ online: false, error: err.message });
+    }
+});
+
+/**
+ * GET /api/screens/:screenId/resolve
+ * Maps billboard.id / screen_id / connection code to canonical player socket id.
+ */
+router.get('/screens/:screenId/resolve', async (req, res) => {
+    try {
+        const { screenId } = req.params;
+        const io = req.app.get('io');
+        const { aliases, canonicalScreenId, billboard } = await resolveScreenContext(screenId);
+        const online = io
+            ? isPlayerOnlineInRooms(io, aliases) || playerRegistry.isOnline(aliases)
+            : playerRegistry.isOnline(aliases);
+        res.json({
+            screenId,
+            canonicalScreenId,
+            aliases,
+            playerOnline: online,
+            billboard: billboard
+                ? { id: billboard.id, screen_id: billboard.screen_id, name: billboard.name }
+                : null,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * GET /api/screens/:screenId/live-feed-status
+ * Debug helper: returns socket membership for both player and viewer rooms.
+ */
+router.get('/screens/:screenId/live-feed-status', async (req, res) => {
+    try {
+        const { screenId } = req.params;
+        const io = req.app.get('io');
+        if (!io) return res.json({ screenId, playerOnline: false, viewers: 0, reason: 'io_unavailable' });
+
+        const { aliases, canonicalScreenId } = await resolveScreenContext(screenId);
+        const playerOnline =
+            isPlayerOnlineInRooms(io, aliases) || playerRegistry.isOnline(aliases);
+        let playerSockets = playerRegistry.countSockets(aliases);
+        if (playerSockets === 0) {
+            for (const id of aliases) {
+                const room = io.sockets.adapter.rooms.get(`screen:${id}`);
+                if (room) playerSockets += room.size;
+            }
+        }
+
+        res.json({
+            screenId,
+            canonicalScreenId,
+            aliases,
+            playerOnline,
+            playerSockets,
+            viewers: countViewersInRooms(io, aliases),
+            connectedPlayers: playerRegistry.listPlayers(),
+        });
+    } catch (err) {
+        res.status(500).json({ screenId: req.params.screenId, error: err.message });
     }
 });
 
@@ -97,6 +176,10 @@ router.get('/screens/:screenId/current-asset', async (req, res) => {
             }
         }
 
+        const slotDuration = currentSlot.durationSec || 15;
+        const slotStartInCycle = accumulated - slotDuration;
+        const startedAtMs = Date.now() - (posInCycle - slotStartInCycle) * 1000;
+
         const isVideo = /\.mp4$/i.test(currentSlot.assetUrl || '');
         res.json({
             screenId,
@@ -105,7 +188,8 @@ router.get('/screens/:screenId/current-asset', async (req, res) => {
                 type: isVideo ? 'video' : 'image',
                 slotNumber: currentSlot.slot,
                 campaignId: currentSlot.campaignId,
-                durationSec: currentSlot.durationSec,
+                durationSec: slotDuration,
+                startedAtMs,
             },
             totalSlots: playlist.length,
             cyclePositionSec: posInCycle,

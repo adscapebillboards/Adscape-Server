@@ -44,6 +44,37 @@ const express = require('express');
 const prisma = require('./db/db');
 const pushRoutes = require('./routes/push');
 const { getPlaylistForScreen } = require('./utils/socketHelpers');
+const { attachLiveFeedP2PHandlers, onViewerJoined, registerPlayerSocket } = require('./services/liveFeedP2P');
+const { resolveScreenContext, isPlayerOnlineInRooms } = require('./utils/screenIdResolver');
+const playerRegistry = require('./services/playerConnectionRegistry');
+
+/**
+ * @typedef {import('../shared/types').AssetPayload} AssetPayload
+ */
+
+/**
+ * In-memory last-known playing state per screen.
+ * WHY: late-joining viewers must render instantly without waiting for the next asset transition.
+ * NOTE: This is intentionally in-memory only (no Redis/DB) per constraints.
+ * @type {Map<string, AssetPayload>}
+ */
+const screenState = new Map();
+
+/** @param {string} screenId */
+function getCachedAssetState(screenId) {
+    const key = String(screenId || '');
+    if (screenState.has(key)) return screenState.get(key);
+    return null;
+}
+
+/** @param {string[]} aliases */
+function getCachedFromAliases(aliases) {
+    for (const id of aliases) {
+        const cached = getCachedAssetState(id);
+        if (cached) return cached;
+    }
+    return null;
+}
 
 // Socket.IO setup
 const { Server } = require("socket.io");
@@ -51,26 +82,41 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
     cors: {
-        origin: [
-            "http://localhost:3000",
-            "http://localhost:3001",
-            "http://localhost:3003",
-            "http://localhost:5173",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:3003",
-            "http://127.0.0.1:5173",
-            "https://your-frontend-domain.com",
-            "https://adscape.co.in",
-            "https://www.adscape.co.in",
-            "https://admin.adscape.co.in",
-            "http://localhost:8080",
-            "http://127.0.0.1:5500",
-            "https://endearing-begonia-927b56.netlify.app"
-        ],
+        origin: (origin, callback) => {
+            try {
+                if (!origin) return callback(null, true);
+                const o = String(origin).replace(/\/$/, '');
+
+                // Allow any ngrok-free domain (subdomain changes frequently).
+                if (o.endsWith('.ngrok-free.dev')) return callback(null, true);
+
+                const allowed = new Set([
+                    "http://localhost:3000",
+                    "http://localhost:3001",
+                    "http://localhost:3003",
+                    "http://localhost:5173",
+                    "http://127.0.0.1:3000",
+                    "http://127.0.0.1:3003",
+                    "http://127.0.0.1:5173",
+                    "https://your-frontend-domain.com",
+                    "https://adscape.co.in",
+                    "https://www.adscape.co.in",
+                    "https://admin.adscape.co.in",
+                    "http://localhost:8080",
+                    "http://127.0.0.1:5500",
+                    "https://endearing-begonia-927b56.netlify.app"
+                ]);
+                return callback(null, allowed.has(o));
+            } catch {
+                return callback(null, false);
+            }
+        },
         methods: ["GET", "POST"],
-        allowedHeaders: ["ngrok-skip-browser-warning"],
-        credentials: true
+        allowedHeaders: ["ngrok-skip-browser-warning", "Content-Type", "Authorization"],
+        // Live-feed sockets do not rely on cookies; keep CORS simple for dev/ngrok.
+        credentials: false
     },
+    transports: ["polling", "websocket"],
     allowEIO3: true
 });
 
@@ -80,7 +126,13 @@ app.use('/api', pushRoutes);
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
-    console.log('Player connected:', socket.id);
+    attachLiveFeedP2PHandlers(io, socket);
+
+    console.log('Player connected:', socket.id, {
+        origin: socket.handshake?.headers?.origin,
+        ua: socket.handshake?.headers?.['user-agent'],
+        transport: socket.conn?.transport?.name
+    });
 
     // Send immediate welcome message
     socket.emit('connected', { message: 'Connected to server', socketId: socket.id });
@@ -94,18 +146,35 @@ io.on('connection', (socket) => {
     // Handle player joining
     socket.on('player-join', async (data) => {
         console.log('[SOCKET] Player joined:', data);
-        const machineId = data.machineId || data.screenId;
-        const screenId = data.screenId || data.machineId;
+        const machineId = String(data.machineId || data.screenId || '').trim();
+        const screenId = String(data.screenId || data.machineId || '').trim();
+        const { aliases, canonicalScreenId } = await resolveScreenContext(screenId);
+        const allAliases = [...new Set([...aliases, machineId, screenId, canonicalScreenId].filter(Boolean))];
 
-        // Join multiple rooms for compatibility
-        socket.join(`player-${machineId}`);
-        socket.join(`screen:${screenId}`);
+        socket.data.isPlayer = true;
+        socket.data.screenId = canonicalScreenId || screenId;
+        socket.data.machineId = machineId;
+
+        if (machineId) socket.join(`player-${machineId}`);
+        for (const id of allAliases) {
+            socket.join(`screen:${id}`);
+        }
+
+        playerRegistry.registerPlayer(socket.id, {
+            screenId: canonicalScreenId || screenId,
+            machineId,
+            aliases: allAliases,
+        });
+
+        registerPlayerSocket(canonicalScreenId || screenId, socket.id);
+        socket.emit('p2p-registered', { screenId: canonicalScreenId || screenId, socketId: socket.id, role: 'player' });
 
         console.log('[SOCKET] Player joined rooms:', {
             socketId: socket.id,
             machineId,
             screenId,
-            rooms: [`player-${machineId}`, `screen:${screenId}`]
+            canonicalScreenId,
+            aliases: allAliases,
         });
 
         socket.emit('connected', {
@@ -118,7 +187,12 @@ io.on('connection', (socket) => {
         if (screenId) {
             try {
                 const billboard = await prisma.billboard.findFirst({
-                    where: { screen_id: screenId }
+                    where: {
+                        OR: [
+                            { id: String(canonicalScreenId || screenId) },
+                            { screen_id: String(screenId) },
+                        ],
+                    },
                 });
 
                 if (billboard) {
@@ -173,16 +247,71 @@ io.on('connection', (socket) => {
     });
 
     // Handle asset playing status updates
-    socket.on('asset-playing', (data) => {
-        console.log('Asset playing:', data);
-        // Broadcast to all connected clients (for admin dashboard)
-        io.emit('asset-status-update', {
-            machineId: data.machineId,
-            screenId: data.screenId,
-            currentAsset: data.currentAsset,
-            isPlaying: data.isPlaying,
-            timestamp: new Date().toISOString()
-        });
+    socket.on('asset-playing', (data, ack) => {
+        try {
+            playerRegistry.touch(socket.id);
+            const screenId = String(data?.screenId || '');
+            const currentAsset = data?.currentAsset || {};
+            const url = String(currentAsset?.url || '');
+            const fallbackImageUrl = String(currentAsset?.fallbackImageUrl || '');
+            const startedAtMs = Number(currentAsset?.startedAtMs);
+            const durationSec = Number(currentAsset?.durationSec);
+
+            const hasRenderable = url.length > 0 || fallbackImageUrl.length > 0;
+            const valid = !!screenId &&
+                hasRenderable &&
+                Number.isFinite(startedAtMs) &&
+                Number.isFinite(durationSec) &&
+                durationSec > 0;
+
+            if (!valid) {
+                console.warn('[asset-playing] Malformed payload (ignored):', {
+                    screenId,
+                    hasRenderable,
+                    startedAtMs,
+                    durationSec
+                });
+                try { if (typeof ack === 'function') ack({ ok: false }); } catch { }
+                return;
+            }
+
+            /** @type {AssetPayload} */
+            const payload = {
+                screenId,
+                currentAsset: {
+                    url,
+                    type: String(currentAsset?.type || 'image') === 'video' ? 'video' : 'image',
+                    slotNumber: Number(currentAsset?.slotNumber || 0),
+                    startedAtMs,
+                    durationSec,
+                    ...(fallbackImageUrl ? { fallbackImageUrl } : {})
+                },
+                timestamp: Date.now()
+            };
+
+            screenState.set(screenId, payload);
+            // Mirror under canonical aliases so cache hits regardless of id format.
+            resolveScreenContext(screenId).then(({ aliases }) => {
+                for (const id of aliases) {
+                    screenState.set(id, payload);
+                }
+            }).catch(() => {});
+
+            const broadcast = (aliases) => {
+                io.emit('asset-status-update', payload);
+                io.emit('live-feed-state', payload);
+                for (const id of aliases) {
+                    io.to(`viewer:${id}`).emit('asset-status-update', payload);
+                    io.to(`viewer:${id}`).emit('live-feed-state', payload);
+                }
+            };
+            resolveScreenContext(screenId).then(({ aliases }) => broadcast(aliases)).catch(() => broadcast([screenId]));
+
+            try { if (typeof ack === 'function') ack({ ok: true }); } catch { }
+        } catch (err) {
+            console.warn('[asset-playing] Handler error (ignored):', err?.message || err);
+            try { if (typeof ack === 'function') ack({ ok: false }); } catch { }
+        }
     });
 
     // Handle player status updates
@@ -197,40 +326,104 @@ io.on('connection', (socket) => {
     });
 
     // -------------------------------------------------------------
-    // Live Preview Support (Client browser <-> Android Player)
+    // Live Feed Support (Client browser <-> Android Player)
     // -------------------------------------------------------------
 
-    // Client browser joins a viewer room so it gets screen-specific events
-    socket.on('viewer-join', (data) => {
+    // Client browser joins viewer rooms (all ID aliases) for screen-specific events
+    socket.on('viewer-join', async (data) => {
         const { screenId } = data || {};
         if (!screenId) return;
-        socket.join(`viewer:${screenId}`);
-        console.log(`[SOCKET] Viewer joined room viewer:${screenId} (socketId=${socket.id})`);
-        socket.emit('viewer-joined', { screenId });
-    });
+        const { aliases, canonicalScreenId } = await resolveScreenContext(screenId);
+        for (const id of aliases) {
+            socket.join(`viewer:${id}`);
+        }
+        console.log(`[SOCKET] Viewer joined rooms for aliases (socketId=${socket.id})`, {
+            requested: screenId,
+            canonicalScreenId,
+            aliases,
+        });
+        socket.emit('viewer-joined', { screenId, canonicalScreenId, aliases });
+        onViewerJoined(io, socket, canonicalScreenId || screenId);
 
-    // Client browser (or admin) requests the player to send a snapshot
-    socket.on('request-live-preview', (data) => {
-        const { screenId } = data || {};
-        if (screenId) {
-            io.to(`screen:${screenId}`).emit('request-live-preview', { adminSocketId: socket.id, screenId });
+        const cached = getCachedFromAliases(aliases);
+        if (cached) {
+            socket.emit('live-feed-state', cached);
+            socket.emit('asset-status-update', cached);
+        }
+
+        // Ask the Android player to push its current asset immediately.
+        for (const id of aliases) {
+            io.to(`screen:${id}`).emit('request-live-state', {
+                screenId: canonicalScreenId || screenId,
+                viewerSocketId: socket.id,
+            });
         }
     });
 
-    // Android player relays a frame back — route to requesting socket AND viewer room
-    socket.on('live-preview-frame', (data) => {
-        const { screenId, frameData, adminSocketId } = data || {};
-        if (!frameData) return;
-        const payload = { screenId, frameData };
-        if (adminSocketId) io.to(adminSocketId).emit('live-preview-frame-response', payload);
-        if (screenId) io.to(`viewer:${screenId}`).emit('live-preview-frame-response', payload);
+    // Explicit subscribe (re-join + pull + nudge player) — used after reconnect.
+    socket.on('live-feed-subscribe', async (data) => {
+        const { screenId } = data || {};
+        if (!screenId) return;
+        const { aliases, canonicalScreenId } = await resolveScreenContext(screenId);
+        for (const id of aliases) {
+            socket.join(`viewer:${id}`);
+        }
+        const cached = getCachedFromAliases(aliases);
+        if (cached) {
+            socket.emit('live-feed-state', cached);
+            socket.emit('asset-status-update', cached);
+        }
+        for (const id of aliases) {
+            io.to(`screen:${id}`).emit('request-live-state', {
+                screenId: canonicalScreenId || screenId,
+                viewerSocketId: socket.id,
+            });
+        }
     });
 
+    // Viewer can pull the cached state on demand (after a hiccup).
+    socket.on('request-current-state', async (data) => {
+        const { screenId } = data || {};
+        if (!screenId) return;
+        const { aliases, canonicalScreenId } = await resolveScreenContext(screenId);
+        const cached = getCachedFromAliases(aliases);
+        if (cached) {
+            socket.emit('live-feed-state', cached);
+            socket.emit('asset-status-update', cached);
+        }
+        for (const id of aliases) {
+            io.to(`screen:${id}`).emit('request-live-state', {
+                screenId: canonicalScreenId || screenId,
+                viewerSocketId: socket.id,
+            });
+        }
+    });
 
-    socket.on('disconnect', () => {
-        console.log('Player disconnected:', socket.id);
+    // NOTE: Screen-capture live preview removed. Live feed mirrors `asset-playing` events.
+
+
+    socket.on('disconnect', (reason) => {
+        playerRegistry.unregister(socket.id);
+        console.log('Socket disconnected:', socket.id, {
+            reason,
+            transport: socket.conn?.transport?.name,
+            wasPlayer: !!socket.data?.isPlayer,
+        });
     });
 });
+
+// Periodic heartbeat to all active viewer rooms.
+// WHY: helps clients detect stale rooms even when a single asset plays for a long time.
+setInterval(() => {
+    try {
+        const now = Date.now();
+        for (const [screenId] of screenState.entries()) {
+            io.to(`viewer:${screenId}`).emit('screen-heartbeat', { screenId, timestamp: now });
+        }
+    } catch (e) {
+        // Never crash the server for a heartbeat.
+    }
+}, 30_000);
 
 
 

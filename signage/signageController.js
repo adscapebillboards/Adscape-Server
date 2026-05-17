@@ -641,6 +641,10 @@ exports.syncPlaybackAnalytics = async (req, res) => {
     // Persist structured playback analytics into existing tables (best-effort).
     // We currently support `slot_playback` rows from the offline-first Electron player.
     try {
+      const isUuid = (value) =>
+        typeof value === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+
       const slotPlaybackRows = rows
         .filter((r) => r && r.table === 'slot_playback' && r.row)
         .map((r) => r.row)
@@ -658,12 +662,24 @@ exports.syncPlaybackAnalytics = async (req, res) => {
 
         const slotIdToAssetUrl = new Map();
         if (uniqueSlotIds.length > 0 && prisma?.slots?.findMany) {
-          const slots = await prisma.slots.findMany({
-            where: { id: { in: uniqueSlotIds } },
-            select: { id: true, asset_url: true }
-          });
-          for (const s of slots || []) {
-            if (s?.id && s?.asset_url) slotIdToAssetUrl.set(String(s.id), String(s.asset_url));
+          // Prisma will throw if we pass non-UUID strings into a UUID column filter.
+          // Players can send legacy/non-UUID slot ids; ignore those and continue best-effort.
+          const uuidSlotIds = uniqueSlotIds.filter(isUuid);
+          if (uuidSlotIds.length !== uniqueSlotIds.length) {
+            logger?.warn?.('[SIGNAGE] Ignoring non-UUID slot ids in analytics batch', {
+              total: uniqueSlotIds.length,
+              uuids: uuidSlotIds.length
+            });
+          }
+
+          if (uuidSlotIds.length > 0) {
+            const slots = await prisma.slots.findMany({
+              where: { id: { in: uuidSlotIds } },
+              select: { id: true, asset_url: true }
+            });
+            for (const s of slots || []) {
+              if (s?.id && s?.asset_url) slotIdToAssetUrl.set(String(s.id), String(s.asset_url));
+            }
           }
         }
 
