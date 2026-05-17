@@ -224,7 +224,9 @@ exports.addBillboard = async (req, res) => {
       opening_time, closing_time, max_advertisers, maxAdvertiseDuration,
       auto_brightness, board_format, audio_output, video: bodyVideo,
       resolution, description, name, reasons,
-      bulk_discount_enabled, bulk_discount_percent, bulk_discount_threshold_days
+      bulk_discount_enabled, bulk_discount_percent, bulk_discount_threshold_days,
+      ram, rom, os_version, osVersion, aiAnalytics, ai_analytics,
+      max_file_size, max_video_size
     } = req.body;
 
     // ── Upload files from multipart request to Cloudinary (signed, no preset needed) ──
@@ -302,7 +304,13 @@ exports.addBillboard = async (req, res) => {
         status: 'PENDING',
         bulkDiscountEnabled: bulk_discount_enabled !== undefined ? Boolean(bulk_discount_enabled) : false,
         bulkDiscountPercent: bulk_discount_percent ? parseInt(bulk_discount_percent) : null,
-        bulkDiscountThresholdDays: bulk_discount_threshold_days ? parseInt(bulk_discount_threshold_days) : null
+        bulkDiscountThresholdDays: bulk_discount_threshold_days ? parseInt(bulk_discount_threshold_days) : null,
+        ram: ram || null,
+        rom: rom || null,
+        osVersion: os_version || osVersion || null,
+        aiAnalytics: aiAnalytics || ai_analytics || null,
+        maxFileSize: max_file_size ? parseInt(max_file_size) : null,
+        maxVideoSize: max_video_size ? parseInt(max_video_size) : null
       }
     });
 
@@ -370,6 +378,18 @@ exports.updateBillboard = async (req, res) => {
     if ('bulkDiscountEnabled' in req.body) updateData.bulkDiscountEnabled = Boolean(req.body.bulkDiscountEnabled);
     if ('bulkDiscountPercent' in req.body) updateData.bulkDiscountPercent = req.body.bulkDiscountPercent ? parseInt(req.body.bulkDiscountPercent) : null;
     if ('bulkDiscountThresholdDays' in req.body) updateData.bulkDiscountThresholdDays = req.body.bulkDiscountThresholdDays ? parseInt(req.body.bulkDiscountThresholdDays) : null;
+
+    // AI specifications and analytics fields
+    if ('ram' in req.body) updateData.ram = req.body.ram;
+    if ('rom' in req.body) updateData.rom = req.body.rom;
+    if ('os_version' in req.body) updateData.osVersion = req.body.os_version;
+    if ('osVersion' in req.body) updateData.osVersion = req.body.osVersion;
+    if ('aiAnalytics' in req.body) updateData.aiAnalytics = req.body.aiAnalytics;
+    if ('ai_analytics' in req.body) updateData.aiAnalytics = req.body.ai_analytics;
+    if ('max_file_size' in req.body) updateData.maxFileSize = req.body.max_file_size ? parseInt(req.body.max_file_size) : null;
+    if ('maxFileSize' in req.body) updateData.maxFileSize = req.body.maxFileSize ? parseInt(req.body.maxFileSize) : null;
+    if ('max_video_size' in req.body) updateData.maxVideoSize = req.body.max_video_size ? parseInt(req.body.max_video_size) : null;
+    if ('maxVideoSize' in req.body) updateData.maxVideoSize = req.body.maxVideoSize ? parseInt(req.body.maxVideoSize) : null;
 
     // Log what we're actually updating
     logger.billboard('Billboard update data', `ID: ${id}`, {

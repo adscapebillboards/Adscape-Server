@@ -128,6 +128,14 @@ model Billboard {
   slot10AssetType      String?   @map("slot10_asset_type") @db.VarChar(20)
   slot10AssetDuration  Int?      @map("slot10_asset_duration") // seconds
 
+  // AI specs and Analytics
+  ram                  String?
+  rom                  String?
+  osVersion            String?   @map("os_version")
+  aiAnalytics          Json?     @map("ai_analytics")
+  maxFileSize          Int?      @map("max_file_size")
+  maxVideoSize         Int?      @map("max_video_size")
+
   @@map("billboards")
 }
 
