@@ -35,6 +35,10 @@ router.put('/profile', auth, superadminController.updateCurrentUserProfile);
 router.get('/superadmin-settings/developer-mode', auth, roleAuth(['developer']), superadminController.getDeveloperMode);
 router.put('/superadmin-settings/developer-mode', auth, roleAuth(['developer']), superadminController.updateDeveloperMode);
 
+// Global test mode toggle (developer role only for modifications, any auth for read)
+router.get('/superadmin-settings/test-mode', auth, superadminController.getTestMode);
+router.put('/superadmin-settings/test-mode', auth, roleAuth(['developer']), superadminController.updateTestMode);
+
 // Clear campaigns and generated slots
 router.delete('/superadmin-settings/clear-campaigns-slots', auth, roleAuth(['developer']), superadminController.clearCampaignsAndSlots);
 

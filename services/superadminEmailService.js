@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../db/db');
 const logger = require('../config/logger');
 
 class SuperAdminEmailService {

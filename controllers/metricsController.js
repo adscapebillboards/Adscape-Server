@@ -251,14 +251,56 @@ const getAdminDashboardStats = async (req, res) => {
       timestamp: campaign.createdAt
     }));
 
+    // Compute real month-over-month growth trends for cards
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const [
+      billboardsInLast30d,
+      publishersInLast30d,
+      bookingsInLast30d,
+      revenueInLast30dResult
+    ] = await Promise.all([
+      prisma.billboard.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.publisher.count({ where: { status: 'active', joinDate: { gte: thirtyDaysAgo } } }),
+      prisma.campaign.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.campaign.aggregate({ where: { createdAt: { gte: thirtyDaysAgo } }, _sum: { totalAmount: true } })
+    ]);
+
+    const totalRevenue = parseFloat(revenueResult._sum.totalAmount || 0);
+    const revenueInLast30d = parseFloat(revenueInLast30dResult._sum.totalAmount || 0);
+
+    const prevBillboards = totalBillboards - billboardsInLast30d;
+    const prevPublishers = totalPublishers - publishersInLast30d;
+    const prevBookings = totalCampaigns - bookingsInLast30d;
+    const prevRevenue = totalRevenue - revenueInLast30d;
+
+    const billboardTrendVal = prevBillboards > 0 
+      ? parseFloat(((billboardsInLast30d / prevBillboards) * 100).toFixed(1))
+      : (billboardsInLast30d > 0 ? 100 : 0);
+    const publisherTrendVal = prevPublishers > 0 
+      ? parseFloat(((publishersInLast30d / prevPublishers) * 100).toFixed(1))
+      : (publishersInLast30d > 0 ? 100 : 0);
+    const bookingTrendVal = prevBookings > 0 
+      ? parseFloat(((bookingsInLast30d / prevBookings) * 100).toFixed(1))
+      : (bookingsInLast30d > 0 ? 100 : 0);
+    const revenueTrendVal = prevRevenue > 0 
+      ? parseFloat(((revenueInLast30d / prevRevenue) * 100).toFixed(1))
+      : (revenueInLast30d > 0 ? 100 : 0);
+
     const stats = {
       totalBookings: totalCampaigns,
-      totalRevenue: parseFloat(revenueResult._sum.totalAmount || 0),
+      totalRevenue: totalRevenue,
       totalBillboards: totalBillboards,
       totalPublishers: totalPublishers,
       billboardStatus: statusCounts,
       recentActivity: activityData,
-      revenueData: revenueData
+      revenueData: revenueData,
+      trends: {
+        billboards: { value: billboardTrendVal, isPositive: billboardTrendVal >= 0 },
+        publishers: { value: publisherTrendVal, isPositive: publisherTrendVal >= 0 },
+        bookings: { value: bookingTrendVal, isPositive: bookingTrendVal >= 0 },
+        revenue: { value: revenueTrendVal, isPositive: revenueTrendVal >= 0 }
+      }
     };
 
     logger.info('Admin dashboard stats fetched:', stats);
@@ -394,6 +436,98 @@ const getPublisherBookings = async (req, res) => {
 const getAdminRevenueSeries = async (req, res) => {
   try {
     const period = (req.query.period || 'month').toString();
+    const { startDate, endDate } = req.query;
+
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
+      const campaigns = await prisma.campaign.findMany({
+        where: {
+          createdAt: {
+            gte: start,
+            lte: end,
+          },
+        },
+        select: { createdAt: true, totalAmount: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      const diffTime = Math.abs(end - start);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      if (diffDays <= 31) {
+        // Group by Day
+        const byDay = new Map();
+        for (let i = 0; i <= diffDays; i++) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          const key = d.toISOString().slice(0, 10);
+          byDay.set(key, { revenue: 0, bookings: 0 });
+        }
+
+        for (const c of campaigns) {
+          const key = (c.createdAt || new Date()).toISOString().slice(0, 10);
+          const amount = Number(c.totalAmount || 0);
+          if (byDay.has(key)) {
+            const current = byDay.get(key);
+            byDay.set(key, {
+              revenue: current.revenue + amount,
+              bookings: current.bookings + 1
+            });
+          }
+        }
+
+        const series = Array.from(byDay.entries()).map(([iso, data]) => {
+          const d = new Date(iso);
+          return {
+            name: d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }),
+            revenue: Math.max(0, Math.round(data.revenue)),
+            bookings: data.bookings
+          };
+        });
+
+        return res.json({ period: 'custom_day', data: series });
+      } else {
+        // Group by Month
+        const byMonth = new Map();
+        let tempDate = new Date(start.getFullYear(), start.getMonth(), 1);
+        while (tempDate <= end) {
+          const key = `${tempDate.getFullYear()}-${String(tempDate.getMonth() + 1).padStart(2, '0')}`;
+          byMonth.set(key, { revenue: 0, bookings: 0 });
+          tempDate.setMonth(tempDate.getMonth() + 1);
+        }
+        const lastKey = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}`;
+        byMonth.set(lastKey, { revenue: 0, bookings: 0 });
+
+        for (const c of campaigns) {
+          const dt = c.createdAt || new Date();
+          const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+          const amount = Number(c.totalAmount || 0);
+          if (byMonth.has(key)) {
+            const current = byMonth.get(key);
+            byMonth.set(key, {
+              revenue: current.revenue + amount,
+              bookings: current.bookings + 1
+            });
+          }
+        }
+
+        const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const series = Array.from(byMonth.entries()).map(([ym, data]) => {
+          const [y, m] = ym.split('-').map(Number);
+          return {
+            name: `${monthNames[m - 1]} ${y}`,
+            revenue: Math.max(0, Math.round(data.revenue)),
+            bookings: data.bookings
+          };
+        });
+
+        return res.json({ period: 'custom_month', data: series });
+      }
+    }
 
     if (period === 'week') {
       const today = new Date();
@@ -414,19 +548,29 @@ const getAdminRevenueSeries = async (req, res) => {
         const d = new Date(start);
         d.setDate(start.getDate() + i);
         const key = d.toISOString().slice(0, 10);
-        byDay.set(key, 0);
+        byDay.set(key, { revenue: 0, bookings: 0 });
       }
 
       for (const c of campaigns) {
         const key = (c.createdAt || new Date()).toISOString().slice(0, 10);
         const amount = Number(c.totalAmount || 0);
-        if (byDay.has(key)) byDay.set(key, (byDay.get(key) || 0) + amount);
+        if (byDay.has(key)) {
+          const current = byDay.get(key);
+          byDay.set(key, {
+            revenue: current.revenue + amount,
+            bookings: current.bookings + 1
+          });
+        }
       }
 
       const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-      const series = Array.from(byDay.entries()).map(([iso, revenue]) => {
+      const series = Array.from(byDay.entries()).map(([iso, data]) => {
         const d = new Date(iso);
-        return { name: dayNames[d.getDay()], revenue: Math.max(0, Math.round(revenue)) };
+        return {
+          name: dayNames[d.getDay()],
+          revenue: Math.max(0, Math.round(data.revenue)),
+          bookings: data.bookings
+        };
       });
       return res.json({ period: 'week', data: series });
     }
@@ -451,20 +595,30 @@ const getAdminRevenueSeries = async (req, res) => {
       const d = new Date(start);
       d.setMonth(start.getMonth() + i);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      byMonth.set(key, 0);
+      byMonth.set(key, { revenue: 0, bookings: 0 });
     }
 
     for (const c of campaigns) {
       const dt = c.createdAt || new Date();
       const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
       const amount = Number(c.totalAmount || 0);
-      if (byMonth.has(key)) byMonth.set(key, (byMonth.get(key) || 0) + amount);
+      if (byMonth.has(key)) {
+        const current = byMonth.get(key);
+        byMonth.set(key, {
+          revenue: current.revenue + amount,
+          bookings: current.bookings + 1
+        });
+      }
     }
 
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const series = Array.from(byMonth.entries()).map(([ym, revenue]) => {
+    const series = Array.from(byMonth.entries()).map(([ym, data]) => {
       const [y, m] = ym.split('-').map(Number);
-      return { name: monthNames[m - 1], revenue: Math.max(0, Math.round(revenue)) };
+      return {
+        name: monthNames[m - 1],
+        revenue: Math.max(0, Math.round(data.revenue)),
+        bookings: data.bookings
+      };
     });
 
     res.json({ period: 'month', data: series });

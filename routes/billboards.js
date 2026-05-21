@@ -36,11 +36,14 @@ router.post('/', auth, requirePublisherKyc, upload.array('images'), controller.a
 // UPDATE billboard (optional: also support image uploads if needed)
 router.put('/:id', auth, controller.updateBillboard);
 
-// Configure player defaults (superadmin only)
-router.put('/:id/player-defaults', auth, roleAuth(['superadmin']), controller.updateBillboardPlayerDefaults);
+// Superadmin: configure default asset (slot 9) and slot10 enabled toggle.
+router.put('/:id/player-defaults', auth, billboardController.updateBillboardPlayerDefaults);
 
-// Update slot 10 asset (billboard owner/admin; superadmin allowed too)
-router.put('/:id/slot10-asset', auth, roleAuth(['admin', 'publisher', 'superadmin']), controller.updateBillboardSlot10Asset);
+// Billboard owner/admin: upload/update slot 10 asset if enabled for this billboard.
+router.put('/:id/slot10-asset', auth, billboardController.updateBillboardSlot10Asset);
+
+// Billboard owner/admin: enable/disable test campaign and manage test slots
+router.put('/:id/test-campaign', auth, billboardController.updateTestCampaign);
 
 // DELETE billboard
 router.delete('/:id', auth, controller.deleteBillboard);

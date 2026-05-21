@@ -499,6 +499,52 @@ exports.updateBillboardSlot10Asset = async (req, res) => {
   }
 };
 
+// Enable/disable test campaign for a billboard
+exports.updateTestCampaign = async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const user = req.user;
+
+  try {
+    const billboard = await prisma.billboard.findUnique({ where: { id } });
+    if (!billboard) return res.status(404).json({ error: 'Billboard not found' });
+
+    // Superadmin can update any billboard; others only their own.
+    if (!isSuperAdminRole(user?.role)) {
+      if (!user?.email || String(billboard.userId || '').toLowerCase() !== String(user.email).toLowerCase()) {
+        return res.status(403).json({ error: 'Access denied. Only the billboard owner can update test campaign.' });
+      }
+    }
+
+    const testCampaignEnabled = 'testCampaignEnabled' in req.body ? Boolean(req.body.testCampaignEnabled) : undefined;
+    const testCampaignSlots = 'testCampaignSlots' in req.body ? req.body.testCampaignSlots : undefined;
+    const testCampaignUserId = 'testCampaignUserId' in req.body ? (req.body.testCampaignUserId ? Number(req.body.testCampaignUserId) : null) : undefined;
+
+    const data = {};
+    if (testCampaignEnabled !== undefined) data.testCampaignEnabled = testCampaignEnabled;
+    if (testCampaignSlots !== undefined) data.testCampaignSlots = testCampaignSlots;
+    if (testCampaignUserId !== undefined) data.testCampaignUserId = testCampaignUserId;
+
+    const updated = await prisma.billboard.update({ where: { id }, data });
+
+    // Broadcast playlist update to the player if connected
+    const screenId = updated.screen_id;
+    if (screenId) {
+      const { getPlaylistForScreen } = require('../utils/socketHelpers');
+      const { playlist, date } = await getPlaylistForScreen(screenId);
+      const io = req.app.get('io');
+      if (io) {
+        io.to(screenId).emit('playlist', { screenId, playlist, date });
+        console.log(`[BILLBOARD_CONTROLLER] Broadcasted updated playlist to screen: ${screenId} (test campaign updated)`);
+      }
+    }
+
+    res.json({ success: true, billboard: toApiBillboard(updated) });
+  } catch (err) {
+    logger.error('updateTestCampaign error', { id, error: err.message });
+    res.status(500).json({ error: 'Failed to update test campaign' });
+  }
+};
+
 // Delete
 exports.deleteBillboard = async (req, res) => {
   const { id } = req.params;

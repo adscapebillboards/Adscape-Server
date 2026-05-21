@@ -274,6 +274,114 @@ router.get('/publisher-revenue-series', auth, async (req, res) => {
 
     const billboardIds = publisherBillboards.map(bb => bb.id);
 
+    const { startDate, endDate } = req.query;
+
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
+      const campaigns = await prisma.campaign.findMany({
+        where: {
+          createdAt: {
+            gte: start,
+            lte: end,
+          },
+        },
+        select: { createdAt: true, totalAmount: true, billboards: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      const diffTime = Math.abs(end - start);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      if (diffDays <= 31) {
+        // Group by Day
+        const byDay = new Map();
+        for (let i = 0; i <= diffDays; i++) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          const key = d.toISOString().slice(0, 10);
+          byDay.set(key, 0);
+        }
+
+        for (const c of campaigns) {
+          let billboards = c.billboards;
+          if (typeof billboards === 'string') {
+            try {
+              billboards = JSON.parse(billboards);
+            } catch {
+              continue;
+            }
+          }
+
+          if (Array.isArray(billboards)) {
+            for (const billboard of billboards) {
+              if (billboardIds.includes(billboard.id)) {
+                const key = (c.createdAt || new Date()).toISOString().slice(0, 10);
+                const amount = Number(c.totalAmount || 0);
+                if (byDay.has(key)) byDay.set(key, (byDay.get(key) || 0) + amount);
+                break;
+              }
+            }
+          }
+        }
+
+        const series = Array.from(byDay.entries()).map(([iso, revenue]) => {
+          const d = new Date(iso);
+          return {
+            name: d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }),
+            revenue: Math.max(0, Math.round(revenue))
+          };
+        });
+
+        return res.json({ period: 'custom_day', data: series });
+      } else {
+        // Group by Month
+        const byMonth = new Map();
+        let tempDate = new Date(start.getFullYear(), start.getMonth(), 1);
+        while (tempDate <= end) {
+          const key = `${tempDate.getFullYear()}-${String(tempDate.getMonth() + 1).padStart(2, '0')}`;
+          byMonth.set(key, 0);
+          tempDate.setMonth(tempDate.getMonth() + 1);
+        }
+        const lastKey = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}`;
+        byMonth.set(lastKey, 0);
+
+        for (const c of campaigns) {
+          let billboards = c.billboards;
+          if (typeof billboards === 'string') {
+            try {
+              billboards = JSON.parse(billboards);
+            } catch {
+              continue;
+            }
+          }
+
+          if (Array.isArray(billboards)) {
+            for (const billboard of billboards) {
+              if (billboardIds.includes(billboard.id)) {
+                const dt = c.createdAt || new Date();
+                const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+                const amount = Number(c.totalAmount || 0);
+                if (byMonth.has(key)) byMonth.set(key, (byMonth.get(key) || 0) + amount);
+                break;
+              }
+            }
+          }
+        }
+
+        const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const series = Array.from(byMonth.entries()).map(([ym, revenue]) => {
+          const [y, m] = ym.split('-').map(Number);
+          return { name: `${monthNames[m - 1]} ${y}`, revenue: Math.max(0, Math.round(revenue)) };
+        });
+
+        return res.json({ period: 'custom_month', data: series });
+      }
+    }
+
     if (period === 'week') {
       const today = new Date();
       const start = new Date(today);

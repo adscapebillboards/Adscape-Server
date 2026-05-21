@@ -123,10 +123,19 @@ model Billboard {
   bulkDiscountThresholdDays Int?      @map("bulk_discount_threshold_days")
 
   // Optional slot 10 (enabled by superadmin; asset uploaded by billboard owner)
-  slot10Enabled        Boolean   @default(false) @map("slot10_enabled")
+   slot10Enabled        Boolean   @default(false) @map("slot10_enabled")
+   maintenanceReason    String?   @map("maintenance_reason")
+   maintenanceDuration   String?   @map("maintenance_duration")
+   maintenanceCause      String?   @map("maintenance_cause")
+   maintenanceNote       String?   @map("maintenance_note")
   slot10AssetUrl       String?   @map("slot10_asset_url") @db.VarChar(500)
   slot10AssetType      String?   @map("slot10_asset_type") @db.VarChar(20)
   slot10AssetDuration  Int?      @map("slot10_asset_duration") // seconds
+
+  // Test Screen Campaign fields (overwrites regular playback when active)
+  testCampaignEnabled  Boolean   @default(false) @map("test_campaign_enabled")
+  testCampaignSlots    Json?     @map("test_campaign_slots") // Array of slots: [{ slot: Int, assetUrl: String, durationSec: Int, assetType: String }]
+  testCampaignUserId   Int?      @map("test_campaign_user_id") // Optional user ID assigned to view this test campaign
 
   // AI specs and Analytics
   ram                  String?

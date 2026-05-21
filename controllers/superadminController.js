@@ -2,7 +2,7 @@ const prisma = require('../db/db');
 const logger = require('../config/logger');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { getDeveloperMode, setDeveloperMode } = require('../utils/developerMode');
+const { getDeveloperMode, setDeveloperMode, getTestMode, setTestMode } = require('../utils/developerMode');
 const { generateAvailabilityForAllBillboards } = require('./availabilityController');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
@@ -481,6 +481,36 @@ exports.clearCampaignsAndSlots = async (req, res) => {
   } catch (error) {
     logger.error('Error clearing campaigns and slots:', error);
     res.status(500).json({ error: 'Failed to clear campaigns and slots' });
+  }
+};
+
+exports.getTestMode = async (req, res) => {
+  try {
+    const enabled = await getTestMode();
+    res.json({ testMode: enabled });
+  } catch (error) {
+    logger.error('Error fetching test mode:', error);
+    res.status(500).json({ error: 'Failed to fetch test mode' });
+  }
+};
+
+exports.updateTestMode = async (req, res) => {
+  try {
+    const enabled = Boolean(req.body?.testMode);
+    await setTestMode(enabled);
+
+    logger.user('Test mode updated', {
+      actorId: req.user?.id,
+      testMode: enabled
+    });
+
+    res.json({
+      message: 'Test mode updated successfully',
+      testMode: enabled
+    });
+  } catch (error) {
+    logger.error('Error updating test mode:', error);
+    res.status(500).json({ error: 'Failed to update test mode' });
   }
 };
 

@@ -688,8 +688,23 @@ router.get('/status/:email', async (req, res) => {
 // GET all publishers with complete information
 router.get('/', auth, async (req, res) => {
   try {
+    const requesterRole = normalizeRole(req.user?.role);
+    const { email } = req.query;
+    const whereClause = { NOT: { role: 'partner' } };
+
+    if (requesterRole !== 'superadmin' && requesterRole !== 'admin') {
+      // Standard publishers/users can only fetch their own publisher profile
+      if (req.user?.email) {
+        whereClause.email = req.user.email.trim().toLowerCase();
+      } else {
+        return res.status(403).json({ error: 'Unauthorized to view publishers.' });
+      }
+    } else if (email) {
+      whereClause.email = String(email).trim().toLowerCase();
+    }
+
     const publishers = await prisma.publisher.findMany({
-      where: { NOT: { role: 'partner' } },
+      where: whereClause,
       orderBy: { id: 'desc' }
     });
 

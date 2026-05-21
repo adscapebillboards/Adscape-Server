@@ -30,7 +30,11 @@ const getSlotsByBillboard = async (req, res) => {
       billboard_id,
       start_date: slot.startDate instanceof Date ? slot.startDate.toISOString() : String(slot.startDate),
       end_date: slot.endDate instanceof Date ? slot.endDate.toISOString() : String(slot.endDate),
-      slot_number: Number(slot.slotNumber)
+      slot_number: Number(slot.slotNumber),
+      campaign_id: slot.campaignId,
+      asset_url: slot.assetUrl,
+      duration: slot.duration,
+      created_for: slot.createdFor
     }));
 
     logger.db('SELECT', `Slots fetched for billboard ${billboard_id}`);

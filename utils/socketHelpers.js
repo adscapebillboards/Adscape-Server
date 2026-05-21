@@ -1,4 +1,5 @@
 const prisma = require('../db/db');
+const { getTestMode } = require('./developerMode');
 
 const getStartOfDayIST = (dateStr) => {
     // Treat dateStr as YYYY-MM-DD
@@ -37,6 +38,28 @@ async function getPlaylistForScreen(screenId) {
                 ]
             }
         });
+
+        // Check if test mode is enabled globally and for this specific billboard
+        const testModeEnabled = await getTestMode();
+        const billboardTestCampaignEnabled = billboard && billboard.testCampaignEnabled === true;
+
+        if (testModeEnabled && billboardTestCampaignEnabled && billboard.testCampaignSlots) {
+            console.log(`[SOCKET_HELPER] Test campaign enabled for billboard ${billboard.id}. Using test slots.`);
+            const testSlots = typeof billboard.testCampaignSlots === 'string'
+                ? JSON.parse(billboard.testCampaignSlots)
+                : billboard.testCampaignSlots;
+
+            const playlist = testSlots.map((slot, index) => ({
+                slot: index + 1,
+                campaignId: slot.campaignId || null,
+                durationSec: slot.durationSec || 15,
+                assetUrl: slot.assetUrl || defaultUrl
+            }));
+
+            const assets = [...new Set(playlist.map(s => s.assetUrl))];
+            console.log(`[SOCKET_HELPER] Returning test playlist with ${playlist.length} items for date ${todayIST}`);
+            return { playlist, assets, date: todayIST };
+        }
 
         // RESOLUTION: standardize on screen_id (machineId) if available
         const resolvedScreenId = (billboard && billboard.screen_id) ? billboard.screen_id : String(screenId);

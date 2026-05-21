@@ -146,7 +146,7 @@ const createCampaign = async (req, res) => {
         owner: owner || billboardObj.owner,
         screen_id,
         userName,
-        status: 'PENDING',
+        status: (campaignData.status === 'APPROVED' || campaignData.status === 'PAYMENT_COMPLETED' || campaignData.status === 'SCHEDULED' || campaignData.status === 'LIVE') ? 'APPROVED' : 'PENDING',
         createDate: getISTTimestamp(),
         endDate,
         billboardCampaignId: `${campaignId}_${id}`,
@@ -174,7 +174,7 @@ const createCampaign = async (req, res) => {
           id: campaignId,
           userName,
           campaignName: campaignName || "Auto Campaign",
-          status: "PENDING",
+          status: campaignData.status || "PENDING",
           totalAmount,
           startDate: parseDateAsUTC(startDate),
           endDate: parseDateAsUTC(endDate),
@@ -183,6 +183,57 @@ const createCampaign = async (req, res) => {
         }
       });
       logger.info('✅ Campaign saved to database successfully');
+
+      // If we are auto-approving / pre-paying (e.g. offline paid campaign), auto-generate slots
+      if (campaignData.status === 'PAYMENT_COMPLETED' || campaignData.paymentStatus === 'paid') {
+        let finalStatus = 'SCHEDULED';
+        if (startDate) {
+          const now = new Date();
+          const start = new Date(startDate);
+          if (!isNaN(start.getTime()) && now >= start) {
+            finalStatus = 'LIVE';
+          }
+        }
+
+        await prisma.campaign.update({
+          where: { id: campaignId },
+          data: { status: finalStatus }
+        });
+
+        try {
+          const toISTDateString = (d) => {
+            if (!d) return null;
+            const dt = new Date(d);
+            const ist = dt.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
+            const [m, day, y] = ist.split('/');
+            return `${y}-${m}-${day}`;
+          };
+
+          const campaignStartStr = toISTDateString(startDate);
+          const campaignEndStr = toISTDateString(endDate);
+
+          const slotBillboards = enrichedBillboards.map(bb => ({
+            ...bb,
+            bookingDetails: {
+              startDate: bb.bookingDetails?.startDate || campaignStartStr,
+              endDate: bb.bookingDetails?.endDate || campaignEndStr,
+            },
+            startDate: bb.bookingDetails?.startDate || campaignStartStr,
+            endDate: bb.bookingDetails?.endDate || campaignEndStr,
+          }));
+
+          await sharedGenerateSlots({
+            id: campaignId,
+            billboards: slotBillboards,
+            startDate: parseDateAsUTC(startDate),
+            endDate: parseDateAsUTC(endDate),
+            campaignName: campaignName || "Auto Campaign"
+          });
+          logger.info(`✅ Slots auto-generated for offline campaign ${campaignId} during creation`);
+        } catch (slotGenError) {
+          logger.error('Error generating slots for offline campaign during creation:', slotGenError.message);
+        }
+      }
     } catch (dbSaveError) {
       logger.error('❌ Failed to save campaign to database:', dbSaveError.message);
       logger.error('Error code:', dbSaveError.code);
