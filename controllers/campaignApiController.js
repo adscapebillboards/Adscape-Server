@@ -539,8 +539,33 @@ const getAllCampaigns = async (req, res) => {
         createdAt: 'desc'
       }
     });
+
+    // Fetch user details for all userName/emails in campaigns
+    const userEmails = [...new Set(campaigns.map(c => c.userName).filter(Boolean))];
+    const users = await prisma.user.findMany({
+      where: {
+        email: { in: userEmails }
+      },
+      select: {
+        email: true,
+        fullName: true,
+        phoneNumber: true
+      }
+    });
+
+    const userMap = new Map(users.map(u => [u.email.toLowerCase(), u]));
+
+    const enrichedCampaigns = campaigns.map(c => {
+      const u = c.userName ? userMap.get(c.userName.toLowerCase()) : null;
+      return {
+        ...c,
+        userFullName: u?.fullName || null,
+        userPhone: u?.phoneNumber || null
+      };
+    });
+
     logger.campaign('All campaigns fetched', `Count: ${campaigns.length}`);
-    res.json(campaigns);
+    res.json(enrichedCampaigns);
   } catch (err) {
     logger.error('Error fetching campaigns:', err);
     res.status(500).json({ error: 'Internal server error.' });

@@ -687,6 +687,43 @@ router.get('/status/:email', async (req, res) => {
   }
 });
 
+const calculatePublisherRevenue = async (publisherEmail) => {
+  try {
+    const campaigns = await prisma.campaign.findMany({
+      where: { status: { in: ['PAYMENT_COMPLETED', 'SCHEDULED', 'ACTIVE', 'COMPLETED'] } }
+    });
+
+    let totalRevenue = 0;
+    const emailLower = String(publisherEmail || '').toLowerCase();
+
+    for (const campaign of campaigns) {
+      let billboards = campaign.billboards;
+      if (typeof billboards === 'string') {
+        try { billboards = JSON.parse(billboards); } catch { billboards = []; }
+      }
+      if (!Array.isArray(billboards) || billboards.length === 0) continue;
+
+      const publisherBillboards = billboards.filter((b) => {
+        const owner = String(b?.owner || b?.userId || '').toLowerCase();
+        return owner && owner === emailLower;
+      });
+      if (!publisherBillboards.length) continue;
+
+      const totalAmount = Number(campaign.totalAmount || 0);
+      if (!totalAmount || Number.isNaN(totalAmount)) continue;
+      
+      const splitAmount = totalAmount * (publisherBillboards.length / billboards.length);
+      const net = Number((splitAmount * 0.90).toFixed(2));
+      totalRevenue += net;
+    }
+
+    return totalRevenue;
+  } catch (error) {
+    console.error('Error calculating publisher revenue:', error);
+    return 0;
+  }
+};
+
 // GET all publishers with complete information
 router.get('/', auth, async (req, res) => {
   try {
@@ -711,25 +748,33 @@ router.get('/', auth, async (req, res) => {
     });
 
     // Format the data for the frontend
-    const formattedPublishers = publishers.map(publisher => ({
-      id: publisher.id,
-      name: publisher.name || 'Unknown',
-      email: publisher.email,
-      phone: publisher.phone || 'Not provided',
-      location: publisher.location || 'Not provided',
-      totalBillboards: publisher.totalBillboards || 0,
-      revenue: publisher.revenue || '₹0',
-      status: publisher.status === 'active' ? 'Active' : publisher.status === 'inactive' ? 'Inactive' : 'Pending',
-      joinDate: publisher.joinDate ? new Date(publisher.joinDate).toLocaleDateString() : 'Unknown',
-      address: publisher.address,
-      businessType: publisher.businessType,
-      city: publisher.city,
-      companyName: publisher.companyName,
-      pincode: publisher.pincode,
-      state: publisher.state,
-      website: publisher.website,
-      role: publisher.role,
-      businessInfo: publisher.businessInfo
+    const formattedPublishers = await Promise.all(publishers.map(async publisher => {
+      const dynamicRevenue = await calculatePublisherRevenue(publisher.email);
+      const parsedDbRevenue = Number(String(publisher.revenue || '').replace(/[^\d.-]/g, ''));
+      const finalRevenue = !Number.isNaN(parsedDbRevenue) && parsedDbRevenue > 0
+        ? parsedDbRevenue
+        : dynamicRevenue;
+
+      return {
+        id: publisher.id,
+        name: publisher.name || 'Unknown',
+        email: publisher.email,
+        phone: publisher.phone || 'Not provided',
+        location: publisher.location || 'Not provided',
+        totalBillboards: publisher.totalBillboards || 0,
+        revenue: String(finalRevenue),
+        status: publisher.status === 'active' ? 'Active' : publisher.status === 'inactive' ? 'Inactive' : 'Pending',
+        joinDate: publisher.joinDate ? new Date(publisher.joinDate).toLocaleDateString() : 'Unknown',
+        address: publisher.address,
+        businessType: publisher.businessType,
+        city: publisher.city,
+        companyName: publisher.companyName,
+        pincode: publisher.pincode,
+        state: publisher.state,
+        website: publisher.website,
+        role: publisher.role,
+        businessInfo: publisher.businessInfo
+      };
     }));
 
     logger.info('Publishers fetched', `Count: ${formattedPublishers.length}`);
@@ -805,6 +850,12 @@ router.get('/:id', auth, async (req, res) => {
       return acc;
     }, { pending: 0, paid: 0, total: 0 });
 
+    const dynamicRevenue = await calculatePublisherRevenue(publisher.email);
+    const parsedDbRevenue = Number(String(publisher.revenue || '').replace(/[^\d.-]/g, ''));
+    const finalRevenue = !Number.isNaN(parsedDbRevenue) && parsedDbRevenue > 0
+      ? parsedDbRevenue
+      : dynamicRevenue;
+
     const publisherDetails = {
       id: publisher.id,
       name: publisher.name || 'Unknown',
@@ -812,7 +863,7 @@ router.get('/:id', auth, async (req, res) => {
       phone: publisher.phone || 'Not provided',
       location: publisher.location || 'Not provided',
       totalBillboards: publisher.totalBillboards || billboards.length,
-      revenue: publisher.revenue || '₹0',
+      revenue: String(finalRevenue),
       status: publisher.status === 'active' ? 'Active' : publisher.status === 'inactive' ? 'Inactive' : 'Pending',
       joinDate: publisher.joinDate ? new Date(publisher.joinDate).toLocaleDateString() : 'Unknown',
       address: publisher.address,
@@ -1098,6 +1149,34 @@ router.delete('/:id', auth, roleAuth(['superadmin']), async (req, res) => {
   } catch (error) {
     console.error('Error deactivating publisher:', error);
     res.status(500).json({ error: 'Failed to deactivate publisher' });
+  }
+});
+
+// POST impersonate publisher
+router.post('/:id/impersonate', auth, roleAuth(['superadmin', 'developer']), async (req, res) => {
+  try {
+    const publisherId = parseInt(req.params.id);
+    const publisher = await prisma.publisher.findUnique({ where: { id: publisherId } });
+    if (!publisher) return res.status(404).json({ error: 'Publisher not found' });
+
+    const role = publisher.role || 'publisher';
+    const token = jwt.sign({ id: publisher.id, email: publisher.email, role }, JWT_SECRET, { expiresIn: '1d' });
+
+    console.log('🎭 Impersonation token generated for publisher:', publisher.email);
+    res.json({
+      token,
+      user: {
+        id: publisher.id,
+        email: publisher.email,
+        name: publisher.name,
+        phone: publisher.phone,
+        location: publisher.location,
+        role
+      }
+    });
+  } catch (error) {
+    console.error('Error during impersonation token generation:', error);
+    res.status(500).json({ error: 'Failed to generate impersonation token' });
   }
 });
 
