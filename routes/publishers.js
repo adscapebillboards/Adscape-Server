@@ -9,6 +9,8 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { normalizeRole } = require('../utils/roles');
 const { isPublisherKycComplete, getPermissionsObject } = require('../utils/publisherKyc');
+const PLATFORM_FEE_PERCENT = 10;
+const PUBLISHER_SHARE_PERCENT = 90;
 
 const JWT_SECRET = process.env.JWT_SECRET;
 let GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -788,6 +790,20 @@ router.get('/:id', auth, async (req, res) => {
     }));
 
     // Format publisher data
+    const payoutRows = await prisma.publisherPayout.findMany({
+      where: { publisherId: publisher.id },
+      orderBy: { createdAt: 'desc' },
+      take: 200
+    });
+
+    const payoutSummary = payoutRows.reduce((acc, row) => {
+      const net = Number(row.publisherNetAmount || 0);
+      if (row.payoutStatus === 'pending') acc.pending += net;
+      if (row.payoutStatus === 'paid') acc.paid += net;
+      acc.total += net;
+      return acc;
+    }, { pending: 0, paid: 0, total: 0 });
+
     const publisherDetails = {
       id: publisher.id,
       name: publisher.name || 'Unknown',
@@ -807,7 +823,9 @@ router.get('/:id', auth, async (req, res) => {
       website: publisher.website,
       role: publisher.role,
       billboards: formattedBillboards,
-      payments: payments
+      payments: payments,
+      payoutSummary,
+      payouts: payoutRows
     };
 
     logger.info('Publisher details fetched', `Publisher ID: ${id}, Billboards: ${billboards.length}, Payments: ${payments.length}`);
@@ -815,6 +833,114 @@ router.get('/:id', auth, async (req, res) => {
   } catch (error) {
     logger.error('Error fetching publisher:', error);
     res.status(500).json({ error: 'Failed to fetch publisher' });
+  }
+});
+
+// Compute payout rows from completed online bookings for a publisher
+router.post('/:id/payouts/compute', auth, roleAuth(['superadmin', 'developer']), async (req, res) => {
+  try {
+    const publisherId = parseInt(req.params.id);
+    const publisher = await prisma.publisher.findUnique({ where: { id: publisherId } });
+    if (!publisher) return res.status(404).json({ error: 'Publisher not found' });
+
+    const campaigns = await prisma.campaign.findMany({
+      where: { status: { in: ['PAYMENT_COMPLETED', 'SCHEDULED', 'ACTIVE', 'COMPLETED'] } },
+      orderBy: { createdAt: 'desc' },
+      take: 1000
+    });
+
+    let created = 0;
+    for (const campaign of campaigns) {
+      const campaignId = String(campaign.id);
+      const existing = await prisma.publisherPayout.findFirst({ where: { publisherId, campaignId } });
+      if (existing) continue;
+
+      let billboards = campaign.billboards;
+      if (typeof billboards === 'string') {
+        try { billboards = JSON.parse(billboards); } catch { billboards = []; }
+      }
+      if (!Array.isArray(billboards)) continue;
+
+      const publisherBillboards = billboards.filter((b) => {
+        const owner = String(b?.owner || b?.userId || '').toLowerCase();
+        return owner && owner === String(publisher.email || '').toLowerCase();
+      });
+      if (!publisherBillboards.length) continue;
+
+      const totalAmount = Number(campaign.totalAmount || 0);
+      if (!totalAmount || Number.isNaN(totalAmount)) continue;
+      const splitAmount = totalAmount * (publisherBillboards.length / billboards.length);
+      const fee = Number((splitAmount * (PLATFORM_FEE_PERCENT / 100)).toFixed(2));
+      const net = Number((splitAmount * (PUBLISHER_SHARE_PERCENT / 100)).toFixed(2));
+
+      await prisma.publisherPayout.create({
+        data: {
+          publisherId,
+          campaignId,
+          bookingAmount: splitAmount,
+          platformFeeAmount: fee,
+          publisherNetAmount: net,
+          payoutStatus: 'pending',
+          isReadBySuperadmin: false,
+          isReadByPublisher: false
+        }
+      });
+      created++;
+    }
+
+    return res.json({ success: true, created });
+  } catch (error) {
+    console.error('Error computing payouts:', error);
+    return res.status(500).json({ error: 'Failed to compute payouts' });
+  }
+});
+
+router.get('/:id/payouts', auth, roleAuth(['superadmin', 'developer', 'publisher']), async (req, res) => {
+  try {
+    const publisherId = parseInt(req.params.id);
+    const rows = await prisma.publisherPayout.findMany({
+      where: { publisherId },
+      orderBy: { createdAt: 'desc' }
+    });
+    const summary = rows.reduce((acc, r) => {
+      const net = Number(r.publisherNetAmount || 0);
+      if (r.payoutStatus === 'pending') acc.pending += net;
+      if (r.payoutStatus === 'paid') acc.paid += net;
+      acc.total += net;
+      return acc;
+    }, { pending: 0, paid: 0, total: 0, pendingCount: 0 });
+    summary.pendingCount = rows.filter(r => r.payoutStatus === 'pending').length;
+    res.json({ payouts: rows, summary });
+  } catch (error) {
+    console.error('Error fetching payouts:', error);
+    res.status(500).json({ error: 'Failed to fetch payouts' });
+  }
+});
+
+router.post('/:id/payouts/process', auth, roleAuth(['superadmin', 'developer']), async (req, res) => {
+  try {
+    const publisherId = parseInt(req.params.id);
+    const { payoutIds } = req.body || {};
+    if (!Array.isArray(payoutIds) || !payoutIds.length) return res.status(400).json({ error: 'payoutIds required' });
+
+    await prisma.publisherPayout.updateMany({
+      where: { id: { in: payoutIds.map(Number) }, publisherId, payoutStatus: 'pending' },
+      data: { payoutStatus: 'paid', paidAt: new Date(), isReadByPublisher: false, isReadBySuperadmin: true }
+    });
+
+    await prisma.$executeRawUnsafe(
+      "INSERT INTO notifications (recipient_role, type, title, message, entity_type, entity_id) VALUES ('publisher', $1, $2, $3, $4, $5)",
+      'PAYOUT_PROCESSED',
+      'Payout Received',
+      `A payout has been processed for your account.`,
+      'publisher',
+      String(publisherId)
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error processing payouts:', error);
+    res.status(500).json({ error: 'Failed to process payouts' });
   }
 });
 

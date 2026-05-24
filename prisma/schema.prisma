@@ -62,8 +62,30 @@ model Publisher {
   googleId        String?          @map("google_id") @db.VarChar(255)
   permissions     Json?            @map("permissions")
   metric          PublisherMetric?
+  payouts         PublisherPayout[]
 
   @@map("publishers")
+}
+
+model PublisherPayout {
+  id                 Int      @id @default(autoincrement())
+  publisherId        Int      @map("publisher_id")
+  campaignId         String?  @map("campaign_id")
+  bookingAmount      Decimal  @map("booking_amount") @db.Decimal(12, 2)
+  platformFeeAmount  Decimal  @map("platform_fee_amount") @db.Decimal(12, 2)
+  publisherNetAmount Decimal  @map("publisher_net_amount") @db.Decimal(12, 2)
+  payoutStatus       String   @default("pending") @map("payout_status") @db.VarChar(20)
+  paidAt             DateTime? @map("paid_at") @db.Timestamptz(6)
+  isReadBySuperadmin Boolean  @default(false) @map("is_read_by_superadmin")
+  isReadByPublisher  Boolean  @default(false) @map("is_read_by_publisher")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  publisher          Publisher @relation(fields: [publisherId], references: [id], onDelete: Cascade)
+
+  @@index([publisherId], map: "idx_publisher_payouts_publisher_id")
+  @@index([payoutStatus], map: "idx_publisher_payouts_status")
+  @@index([campaignId], map: "idx_publisher_payouts_campaign_id")
+  @@map("publisher_payouts")
 }
 
 model Billboard {
