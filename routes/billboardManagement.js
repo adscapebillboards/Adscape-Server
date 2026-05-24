@@ -95,6 +95,63 @@ router.patch('/:id/connect', async (req, res) => {
     });
 
     logger.billboard('Screen connected', `Billboard ID: ${id}, Screen ID: ${targetScreenId}`);
+
+    // Emit live pairing details and initial playlist to the player instantly via Socket.IO
+    const io = req.app.get('io');
+    if (io) {
+      try {
+        const globalDefault = await prisma.defaultAsset.findFirst({
+          where: { isActive: true },
+          orderBy: { updatedAt: 'desc' }
+        });
+        const globalUrl = globalDefault ? globalDefault.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+        const defaultAssetUrl = billboard.defaultAssetUrl || globalUrl;
+
+        const payload = {
+          screenId: billboard.id,
+          name: billboard.name,
+          location: billboard.location,
+          city: billboard.city,
+          defaultImage: defaultAssetUrl
+        };
+
+        // Emit to the old hardware ID room so the player showing the pairing screen gets it instantly
+        io.to(`player-${targetScreenId}`).emit('billboard-details', payload);
+        io.to(`screen:${targetScreenId}`).emit('billboard-details', payload);
+
+        // If the user used a connectionCode, also emit to the connectionCode room to be safe
+        if (player && player.connectionCode) {
+          io.to(`player-${player.connectionCode}`).emit('billboard-details', payload);
+          io.to(`screen:${player.connectionCode}`).emit('billboard-details', payload);
+        }
+
+        // Also fetch and emit playlist instantly so player caches it
+        const { getPlaylistForScreen } = require('../utils/socketHelpers');
+        const { playlist, assets, date } = await getPlaylistForScreen(billboard.id);
+        
+        // Emit playlist and assets to all aliases
+        const aliases = [
+          `player-${targetScreenId}`,
+          `screen:${targetScreenId}`,
+          `player-${billboard.id}`,
+          `screen:${billboard.id}`
+        ];
+        if (player && player.connectionCode) {
+          aliases.push(`player-${player.connectionCode}`);
+          aliases.push(`screen:${player.connectionCode}`);
+        }
+
+        for (const alias of aliases) {
+          io.to(alias).emit('playlist', { screenId: billboard.id, playlist, date });
+          io.to(alias).emit('assets', { screenId: billboard.id, assets });
+        }
+        
+        logger.info(`[SOCKET] Broadcasted billboard-details and playlist to paired player: ${targetScreenId}`);
+      } catch (socketErr) {
+        logger.error('Error emitting pairing socket events:', socketErr);
+      }
+    }
+
     res.json({ message: 'Billboard connected successfully', billboard });
   } catch (err) {
     if (err.code === 'P2025') {
