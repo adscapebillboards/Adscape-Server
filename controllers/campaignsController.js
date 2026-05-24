@@ -6,8 +6,154 @@ const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 
 const createCampaign = async (req, res) => {
   try {
-    const { billboards } = req.body;
     const user = req.user; // From getUserInfo middleware
+    const isOffline = req.body.isOffline === 'true' || req.body.billboardId;
+
+    if (isOffline) {
+      const { campaignName, billboardId, startDate, endDate, totalAmount, status, paymentStatus } = req.body;
+      const { v4: uuidv4 } = require('uuid');
+      const cloudinary = require('../config/cloudinary');
+
+      const streamUpload = (fileBuffer) => {
+        return new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { resource_type: 'auto' },
+            (error, result) => {
+              if (error) return reject(error);
+              resolve(result.secure_url);
+            }
+          );
+          stream.end(fileBuffer);
+        });
+      };
+
+      const fileUrls = [];
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          try {
+            const url = await streamUpload(file.buffer);
+            fileUrls.push(url);
+          } catch (uploadErr) {
+            logger.error('Cloudinary upload error in offline campaign:', uploadErr);
+          }
+        }
+      }
+
+      const dbBillboard = await prisma.billboard.findUnique({
+        where: { id: billboardId }
+      });
+      if (!dbBillboard) {
+        return res.status(404).json({ error: 'Billboard not found' });
+      }
+
+      const parsedStartDate = new Date(startDate);
+      const parsedEndDate = new Date(endDate);
+      const days = Math.ceil((parsedEndDate.getTime() - parsedStartDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      const parsedTotalAmount = parseFloat(totalAmount) || (days * dbBillboard.pricePerDay);
+
+      const campaignId = uuidv4();
+      const { getISTTimestamp } = require('../utils/timeUtils');
+
+      const finalFileUrls = fileUrls.length > 0
+        ? fileUrls
+        : (dbBillboard.images && dbBillboard.images.length > 0 ? [dbBillboard.images[0]] : []);
+
+      const enrichedBillboards = [{
+        id: dbBillboard.id,
+        location: dbBillboard.location,
+        city: dbBillboard.city,
+        pricePerDay: dbBillboard.pricePerDay,
+        totalPrice: parsedTotalAmount,
+        bookingDetails: {
+          startDate,
+          endDate
+        },
+        files: finalFileUrls,
+        images: dbBillboard.images || [],
+        owner: dbBillboard.userId || dbBillboard.owner,
+        screen_id: dbBillboard.screenId || dbBillboard.screen_id,
+        userName: user.email,
+        status: 'APPROVED',
+        createDate: getISTTimestamp(),
+        endDate,
+        billboardCampaignId: `${campaignId}_${dbBillboard.id}`,
+        assetScheduling: {
+          assetStartDate: startDate,
+          assetEndDate: endDate,
+          duration: 15
+        }
+      }];
+
+      const { parseDateAsUTC } = require('../utils/timeUtils');
+      const campaign = await prisma.campaign.create({
+        data: {
+          id: campaignId,
+          userName: user.email,
+          campaignName: campaignName || "Offline Campaign",
+          status: status || "APPROVED",
+          totalAmount: parsedTotalAmount,
+          startDate: parseDateAsUTC(startDate),
+          endDate: parseDateAsUTC(endDate),
+          billboards: enrichedBillboards,
+          assets: finalFileUrls.map(url => ({ billboardId: dbBillboard.id, url }))
+        }
+      });
+
+      // For offline campaigns, always auto-approve and pre-schedule/activate the campaign, triggering direct slot generation immediately
+      if (isOffline || status === 'PAYMENT_COMPLETED' || paymentStatus === 'paid') {
+        let finalStatus = 'SCHEDULED';
+        const now = new Date();
+        const start = new Date(startDate);
+        if (!isNaN(start.getTime()) && now >= start) {
+          finalStatus = 'LIVE';
+        }
+
+        await prisma.campaign.update({
+          where: { id: campaignId },
+          data: { status: finalStatus }
+        });
+
+        try {
+          const toISTDateString = (d) => {
+            if (!d) return null;
+            const dt = new Date(d);
+            const ist = dt.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
+            const [m, day, y] = ist.split('/');
+            return `${y}-${m}-${day}`;
+          };
+
+          const campaignStartStr = toISTDateString(startDate);
+          const campaignEndStr = toISTDateString(endDate);
+
+          const slotBillboards = enrichedBillboards.map(bb => ({
+            ...bb,
+            bookingDetails: {
+              startDate: bb.bookingDetails?.startDate || campaignStartStr,
+              endDate: bb.bookingDetails?.endDate || campaignEndStr,
+            },
+            startDate: bb.bookingDetails?.startDate || campaignStartStr,
+            endDate: bb.bookingDetails?.endDate || campaignEndStr,
+          }));
+
+          await sharedGenerateSlots({
+            id: campaignId,
+            billboards: slotBillboards,
+            startDate: parseDateAsUTC(startDate),
+            endDate: parseDateAsUTC(endDate),
+            campaignName: campaignName || "Offline Campaign"
+          });
+          logger.info(`✅ Slots auto-generated for offline campaign ${campaignId} during creation`);
+        } catch (slotGenError) {
+          logger.error('Error generating slots for offline campaign during creation:', slotGenError.message);
+        }
+      }
+
+      logger.campaign('Offline campaign created successfully', `Campaign ID: ${campaign.id}, User: ${user.email}`);
+      return res.status(201).json({ message: 'Campaign created successfully', campaign });
+    }
+
+    // --- Regular JSON Campaign Flow ---
+    const { billboards } = req.body;
 
     // Calculate total amount
     const totalAmount = billboards.reduce((sum, b) => {

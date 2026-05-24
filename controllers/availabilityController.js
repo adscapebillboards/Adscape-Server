@@ -7,23 +7,27 @@ const IST_OFFSET_MIN = 330; // +05:30
 
 function parseDateParam(value, fallback) {
   if (!value) return fallback;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return new Date(value + 'T00:00:00.000Z');
+  }
   const d = new Date(value);
   if (isNaN(d.getTime())) return fallback;
-  d.setHours(0, 0, 0, 0);
+  d.setUTCHours(0, 0, 0, 0);
   return d;
 }
 
 function startOfDay(d) {
   const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
+  x.setUTCHours(0, 0, 0, 0);
   return x;
 }
 
 function endOfDay(d) {
   const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
+  x.setUTCHours(23, 59, 59, 999);
   return x;
 }
+
 
 function dateKeyIST(d) {
   const ist = new Date(d.getTime() + IST_OFFSET_MIN * 60 * 1000);
@@ -88,7 +92,7 @@ async function computeAvailabilityForRange(billboardId, startDate, endDate, tota
     const rangeEnd = bEnd < endDate ? bEnd : endOfDay(endDate);
     if (rangeEnd < rangeStart) continue;
 
-    for (let d = new Date(rangeStart); d <= rangeEnd; d.setDate(d.getDate() + 1)) {
+    for (let d = new Date(rangeStart); d <= rangeEnd; d.setUTCDate(d.getUTCDate() + 1)) {
       const key = dateKeyIST(d);
       if (!results[key]) results[key] = 0;
       results[key] += 1; // one booking consumes one slot per day
@@ -102,7 +106,7 @@ async function computeAvailabilityForRange(billboardId, startDate, endDate, tota
   for (
     let d = new Date(startDate);
     d <= endDate;
-    d.setDate(d.getDate() + 1)
+    d.setUTCDate(d.getUTCDate() + 1)
   ) {
     const key = dateKeyIST(d);
     const count = Math.max(0, Math.min(totalSlots, results[key] || 0));
@@ -315,7 +319,7 @@ exports.getBillboardAvailability = async (req, res) => {
 
     // Build ordered array response
     const response = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
       const key = dateKeyIST(d);
       response.push({ date: key, ...(byKey.get(key) || { booked: [], unbooked: Array.from({ length: TOTAL_SLOTS_PER_DAY }, (_, i) => i + 1), totalSlots: TOTAL_SLOTS_PER_DAY }) });
     }
@@ -425,7 +429,7 @@ exports.getBillboardSlots = async (req, res) => {
 
     // Identify which dates in the range have NO stored record (need live computation)
     const missingDates = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
       if (!storedByKey.has(dateKeyIST(d))) {
         missingDates.push(new Date(d));
       }
@@ -450,7 +454,7 @@ exports.getBillboardSlots = async (req, res) => {
 
     // Build DD.MM.YYYY response map from the (now complete) stored values
     const slotsMap = {};
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
       const key = dateKeyIST(d);
       const [istYear, istMonth, istDay] = key.split('-');
       const dateStr = `${istDay}.${istMonth}.${istYear}`;

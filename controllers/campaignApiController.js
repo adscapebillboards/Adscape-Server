@@ -185,7 +185,8 @@ const createCampaign = async (req, res) => {
       logger.info('✅ Campaign saved to database successfully');
 
       // If we are auto-approving / pre-paying (e.g. offline paid campaign), auto-generate slots
-      if (campaignData.status === 'PAYMENT_COMPLETED' || campaignData.paymentStatus === 'paid') {
+      const isOffline = req.body.isOffline === 'true' || campaignData.isOffline === 'true' || campaignData.isOffline === true;
+      if (isOffline || campaignData.status === 'PAYMENT_COMPLETED' || campaignData.paymentStatus === 'paid') {
         let finalStatus = 'SCHEDULED';
         if (startDate) {
           const now = new Date();
@@ -212,15 +213,21 @@ const createCampaign = async (req, res) => {
           const campaignStartStr = toISTDateString(startDate);
           const campaignEndStr = toISTDateString(endDate);
 
-          const slotBillboards = enrichedBillboards.map(bb => ({
-            ...bb,
-            bookingDetails: {
+          const slotBillboards = enrichedBillboards.map(bb => {
+            const files = Array.isArray(bb.files) && bb.files.length > 0
+              ? bb.files
+              : (bb.images && bb.images.length > 0 ? [bb.images[0]] : ["https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png"]);
+            return {
+              ...bb,
+              files,
+              bookingDetails: {
+                startDate: bb.bookingDetails?.startDate || campaignStartStr,
+                endDate: bb.bookingDetails?.endDate || campaignEndStr,
+              },
               startDate: bb.bookingDetails?.startDate || campaignStartStr,
               endDate: bb.bookingDetails?.endDate || campaignEndStr,
-            },
-            startDate: bb.bookingDetails?.startDate || campaignStartStr,
-            endDate: bb.bookingDetails?.endDate || campaignEndStr,
-          }));
+            };
+          });
 
           await sharedGenerateSlots({
             id: campaignId,

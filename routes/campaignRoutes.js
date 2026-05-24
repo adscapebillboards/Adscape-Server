@@ -1,6 +1,6 @@
-
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const { 
   createCampaign, 
   getUserCampaigns, 
@@ -11,9 +11,10 @@ const {
 const auth = require('../middleware/auth');
 const roleAuth = require('../middleware/roleAuth');
 
+const upload = multer({ storage: multer.memoryStorage() });
 
 // POST /api/campaigns - Create a new campaign
-router.post('/', auth, createCampaign);
+router.post('/', auth, upload.array('files'), createCampaign);
 
 // GET /api/campaigns - Get user's campaigns with role-based filtering
 router.get('/', auth, getUserCampaigns);
