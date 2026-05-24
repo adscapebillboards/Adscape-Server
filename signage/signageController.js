@@ -10,7 +10,11 @@ function inferMediaTypeFromUrl(url) {
 }
 
 function appendBillboardDefaults(assets, billboard) {
-    const list = [...assets];
+    // Keep commercial slots untouched, but ensure slot 9/10 appear only once.
+    const list = [...assets].filter((asset) => {
+        const slot = Number(asset?.slot_number ?? asset?.slotNumber ?? 0);
+        return slot !== 9 && slot !== 10;
+    });
 
     const defaultUrl = billboard?.defaultAssetUrl
         || billboard?.default_asset_url
@@ -19,7 +23,7 @@ function appendBillboardDefaults(assets, billboard) {
     const defaultType = String(billboard?.defaultAssetType || billboard?.default_asset_type || inferMediaTypeFromUrl(defaultUrl) || "image").toLowerCase();
     const defaultDuration = Number(billboard?.defaultAssetDuration ?? billboard?.default_asset_duration ?? 15) || 15;
 
-    list.push({
+    list.unshift({
         id: "default-9",
         _id: "default-9",
         url: defaultUrl,
@@ -30,7 +34,8 @@ function appendBillboardDefaults(assets, billboard) {
         campaignId: "default",
         campaign_id: "default",
         slotNumber: 9,
-        slot_number: 9
+        slot_number: 9,
+        priority: 10
     });
 
     const slot10Enabled = Boolean(billboard?.slot10Enabled ?? billboard?.slot10_enabled);
@@ -49,7 +54,8 @@ function appendBillboardDefaults(assets, billboard) {
             campaignId: "slot10",
             campaign_id: "slot10",
             slotNumber: 10,
-            slot_number: 10
+            slot_number: 10,
+            priority: 9
         });
     }
 
