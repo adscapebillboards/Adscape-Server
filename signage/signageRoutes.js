@@ -11,6 +11,7 @@ router.delete('/devices/:deviceId', signageController.deregisterDevice);
 
 // screen/Screen Endpoints
 router.get('/screens/:screenId/assets', signageController.getAssets);
+router.get('/screens/:screenId/priority-assets', signageController.getPriorityAssets);
 router.get('/screens/:screenId/details', signageController.getScreenDetails);
 router.put('/screens/:screenId/orientation', signageController.updateScreenOrientation);
 

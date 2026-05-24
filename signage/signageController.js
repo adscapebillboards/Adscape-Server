@@ -393,28 +393,10 @@ exports.getAssets = async (req, res) => {
         });
 
         if (matchedCampaigns.length > 0) {
-            // Found active campaigns! Let's generate a temporary response or a real schedule
-            const assets = [];
-            let rrIndex = 0;
-            const defaultUrl = 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
-
-            for (let i = 1; i <= 8; i++) {
-                const campaign = matchedCampaigns[rrIndex];
-                rrIndex = (rrIndex + 1) % matchedCampaigns.length;
-                
-                const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
-                const bb = bbs.find(b => billboardIds.includes(String(b.id || b.billboardId || "")));
-                const assetUrl = (bb?.files?.[0]) || (bb?.creative) || (bb?.images?.[0]) || (billboard.images?.[0]) || defaultUrl;
-
-                assets.push({
-                    id: `${campaign.id}-${i}`,
-                    url: assetUrl,
-                    type: assetUrl.toLowerCase().endsWith('.mp4') ? 'video' : 'image',
-                    duration: 15,
-                    campaignId: campaign.id
-                });
-            }
-            return res.json(appendBillboardDefaults(assets, billboard));
+            // Campaign exists but no explicit generated/daily slot rows for this date range.
+            // Do NOT synthesize fake commercial slots (1-8), otherwise clients will play
+            // fabricated content as if booked slots exist. Return only defaults (9/10).
+            return res.json(appendBillboardDefaults([], billboard));
         }
 
         // Truly no campaigns found, return defaults
@@ -473,6 +455,34 @@ exports.getAssets = async (req, res) => {
   } catch (error) {
     logger.error('Fetch Assets Error:', error);
     res.status(500).json({ error: 'Failed to fetch assets' });
+  }
+};
+
+// 3a. Get Priority Assets for Screen (slot 9/10 only)
+// GET /signage/screens/:screenId/priority-assets
+exports.getPriorityAssets = async (req, res) => {
+  try {
+    const { screenId } = req.params;
+    const billboard = await prisma.billboard.findFirst({
+      where: {
+        OR: [
+          { id: String(screenId) },
+          { screen_id: String(screenId) }
+        ]
+      }
+    });
+
+    if (!billboard) {
+      return res.status(404).json({ error: 'Billboard not found' });
+    }
+
+    const priorityAssets = appendBillboardDefaults([], billboard)
+      .filter((asset) => asset.slot_number === 9 || asset.slot_number === 10);
+
+    return res.json(priorityAssets);
+  } catch (error) {
+    logger.error('Fetch Priority Assets Error:', error);
+    return res.status(500).json({ error: 'Failed to fetch priority assets' });
   }
 };
 
