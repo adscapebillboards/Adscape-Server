@@ -41,6 +41,11 @@ router.put('/superadmin-settings/test-mode', auth, roleAuth(['developer']), supe
 
 // Clear campaigns and generated slots
 router.delete('/superadmin-settings/clear-campaigns-slots', auth, roleAuth(['developer']), superadminController.clearCampaignsAndSlots);
+router.get('/superadmin-settings/invoice-template-mjml', auth, roleAuth(['superadmin', 'developer']), superadminController.getInvoiceTemplateMjml);
+router.put('/superadmin-settings/invoice-template-mjml', auth, roleAuth(['superadmin', 'developer']), superadminController.updateInvoiceTemplateMjml);
+router.post('/superadmin-settings/invoice-template-mjml/reset', auth, roleAuth(['superadmin', 'developer']), superadminController.resetInvoiceTemplateMjml);
+router.get('/superadmin-settings/apk-releases', auth, superadminController.getApkReleases);
+router.put('/superadmin-settings/apk-releases', auth, roleAuth(['developer']), superadminController.saveApkReleases);
 
 module.exports = router;
 

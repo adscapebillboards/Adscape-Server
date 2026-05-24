@@ -143,6 +143,14 @@ io.on('connection', (socket) => {
         socket.emit('test-response', { message: 'Test response from server', received: data });
     });
 
+    // Web clients can subscribe to publisher-specific finance updates.
+    socket.on('join-publisher-room', (payload) => {
+        const publisherId = Number(payload?.publisherId);
+        if (!Number.isFinite(publisherId) || publisherId <= 0) return;
+        socket.join(`publisher:${publisherId}`);
+        socket.emit('publisher-room-joined', { publisherId });
+    });
+
     // Handle player joining
     socket.on('player-join', async (data) => {
         console.log('[SOCKET] Player joined:', data);

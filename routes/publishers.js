@@ -728,7 +728,8 @@ router.get('/', auth, async (req, res) => {
       pincode: publisher.pincode,
       state: publisher.state,
       website: publisher.website,
-      role: publisher.role
+      role: publisher.role,
+      businessInfo: publisher.businessInfo
     }));
 
     logger.info('Publishers fetched', `Count: ${formattedPublishers.length}`);
@@ -888,6 +889,16 @@ router.post('/:id/payouts/compute', auth, roleAuth(['superadmin', 'developer']),
       created++;
     }
 
+    try {
+      const io = req.app.get('io');
+      io?.to(`publisher:${publisherId}`)?.emit('publisher-finance-updated', {
+        publisherId,
+        source: 'payouts-compute',
+        created,
+        timestamp: new Date().toISOString()
+      });
+    } catch (_) { }
+
     return res.json({ success: true, created });
   } catch (error) {
     console.error('Error computing payouts:', error);
@@ -936,6 +947,16 @@ router.post('/:id/payouts/process', auth, roleAuth(['superadmin', 'developer']),
       'publisher',
       String(publisherId)
     );
+
+    try {
+      const io = req.app.get('io');
+      io?.to(`publisher:${publisherId}`)?.emit('publisher-finance-updated', {
+        publisherId,
+        source: 'payouts-process',
+        payoutIds: payoutIds.map(Number),
+        timestamp: new Date().toISOString()
+      });
+    } catch (_) { }
 
     res.json({ success: true });
   } catch (error) {
@@ -999,17 +1020,60 @@ router.post('/', auth, roleAuth(['superadmin', 'admin']), async (req, res) => {
 });
 
 // PUT update publisher
-router.put('/:id', auth, roleAuth(['superadmin']), async (req, res) => {
+router.put('/:id', auth, roleAuth(['superadmin', 'admin', 'publisher']), async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const publisherId = parseInt(id);
+    const incomingData = req.body || {};
 
-    // Remove fields that shouldn't be updated
-    delete updateData.id;
-    delete updateData.password;
+    const requesterRole = normalizeRole(req.user?.role);
+    const requesterId = Number(req.user?.id);
+    if ((requesterRole === 'publisher' || requesterRole === 'admin') && requesterId !== publisherId) {
+      return res.status(403).json({ error: 'You can only update your own profile.' });
+    }
+
+    // Normalize frontend aliases and whitelist only valid Prisma Publisher fields.
+    // This prevents PrismaClientValidationError on unknown args like fullName/phoneNumber.
+    const updateData = {};
+    const allowedFields = new Set([
+      'name',
+      'email',
+      'phone',
+      'location',
+      'companyName',
+      'address',
+      'city',
+      'state',
+      'pincode',
+      'website',
+      'businessType',
+      'businessInfo',
+      'status',
+      'role',
+      'permissions',
+      'googleId',
+      'totalBillboards',
+      'revenue',
+      'joinDate'
+    ]);
+
+    for (const [key, value] of Object.entries(incomingData)) {
+      if (key === 'id' || key === 'password') continue;
+      if (key === 'fullName') {
+        if (!incomingData.name && typeof value === 'string') updateData.name = value;
+        continue;
+      }
+      if (key === 'phoneNumber') {
+        updateData.phone = value;
+        continue;
+      }
+      if (allowedFields.has(key)) {
+        updateData[key] = value;
+      }
+    }
 
     const publisher = await prisma.publisher.update({
-      where: { id: parseInt(id) },
+      where: { id: publisherId },
       data: updateData
     });
 

@@ -3,6 +3,8 @@ const logger = require('../config/logger');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { getDeveloperMode, setDeveloperMode, getTestMode, setTestMode } = require('../utils/developerMode');
+const { readInvoiceTemplateMjml, writeInvoiceTemplateMjml, getDefaultTemplate } = require('../utils/invoiceTemplateStore');
+const { readApkReleases, writeApkReleases } = require('../utils/apkReleaseStore');
 const { generateAvailabilityForAllBillboards } = require('./availabilityController');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
@@ -511,6 +513,63 @@ exports.updateTestMode = async (req, res) => {
   } catch (error) {
     logger.error('Error updating test mode:', error);
     res.status(500).json({ error: 'Failed to update test mode' });
+  }
+};
+
+exports.getInvoiceTemplateMjml = async (_req, res) => {
+  try {
+    const mjml = readInvoiceTemplateMjml();
+    res.json({ success: true, mjml });
+  } catch (error) {
+    logger.error('Error fetching invoice MJML template:', error);
+    res.status(500).json({ error: 'Failed to fetch invoice template' });
+  }
+};
+
+exports.updateInvoiceTemplateMjml = async (req, res) => {
+  try {
+    const mjml = String(req.body?.mjml || '').trim();
+    if (!mjml) {
+      return res.status(400).json({ error: 'mjml is required' });
+    }
+    writeInvoiceTemplateMjml(mjml);
+    res.json({ success: true, mjml });
+  } catch (error) {
+    logger.error('Error saving invoice MJML template:', error);
+    res.status(500).json({ error: 'Failed to save invoice template' });
+  }
+};
+
+exports.resetInvoiceTemplateMjml = async (_req, res) => {
+  try {
+    const mjml = getDefaultTemplate();
+    writeInvoiceTemplateMjml(mjml);
+    res.json({ success: true, mjml });
+  } catch (error) {
+    logger.error('Error resetting invoice MJML template:', error);
+    res.status(500).json({ error: 'Failed to reset invoice template' });
+  }
+};
+
+exports.getApkReleases = async (_req, res) => {
+  try {
+    const releases = readApkReleases();
+    res.json({ success: true, releases });
+  } catch (error) {
+    logger.error('Error fetching APK releases:', error);
+    res.status(500).json({ error: 'Failed to fetch APK releases' });
+  }
+};
+
+exports.saveApkReleases = async (req, res) => {
+  try {
+    const releases = Array.isArray(req.body?.releases) ? req.body.releases : null;
+    if (!releases) return res.status(400).json({ error: 'releases array is required' });
+    writeApkReleases(releases);
+    res.json({ success: true, releases });
+  } catch (error) {
+    logger.error('Error saving APK releases:', error);
+    res.status(500).json({ error: 'Failed to save APK releases' });
   }
 };
 
