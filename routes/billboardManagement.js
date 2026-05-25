@@ -33,6 +33,100 @@ router.get('/lookup-player/:code', async (req, res) => {
   }
 });
 
+// Force push live slots and assets to the screen instantly
+router.post('/:id/push-live', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const billboard = await prisma.billboard.findUnique({
+      where: { id }
+    });
+
+    if (!billboard) {
+      return res.status(404).json({ error: 'Billboard not found' });
+    }
+
+    if (!billboard.screen_id) {
+      return res.status(400).json({ error: 'This billboard does not have a screen connected. Please connect a screen first.' });
+    }
+
+    const resolvedScreenId = billboard.screen_id;
+
+    // Determine today's scheduleDate in IST timezone
+    const istDate = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).format(new Date());
+    const scheduleDate = new Date(istDate);
+
+    // Find today's daily schedule for this screen
+    const schedule = await prisma.dailySchedule.findFirst({
+      where: { screenId: resolvedScreenId, scheduleDate }
+    });
+
+    if (schedule) {
+      // Clear today's daily slots
+      await prisma.dailySlot.deleteMany({
+        where: { scheduleId: schedule.id }
+      });
+      // Delete today's daily schedule
+      await prisma.dailySchedule.delete({
+        where: { id: schedule.id }
+      });
+      logger.info(`[PUSH_LIVE] Cleared today's schedule (${schedule.id}) and slots for screen ${resolvedScreenId}`);
+    }
+
+    // Force instant regeneration of slots
+    const { getPlaylistForScreen } = require('../utils/socketHelpers');
+    const { playlist, assets, date } = await getPlaylistForScreen(resolvedScreenId);
+
+    const io = req.app.get('io') || global.io;
+    if (io) {
+      const globalDefault = await prisma.defaultAsset.findFirst({
+        where: { isActive: true },
+        orderBy: { updatedAt: 'desc' }
+      });
+      const globalUrl = globalDefault ? globalDefault.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
+      const defaultAssetUrl = billboard.defaultAssetUrl || globalUrl;
+
+      const detailsPayload = {
+        screenId: billboard.id,
+        name: billboard.name,
+        location: billboard.location,
+        city: billboard.city,
+        defaultImage: defaultAssetUrl,
+        cmsMode: Boolean(billboard.cmsMode)
+      };
+
+      // Broadcast both details and playlist to all possible rooms
+      const rooms = [
+        resolvedScreenId,
+        `screen:${resolvedScreenId}`,
+        `player-${resolvedScreenId}`,
+        `player-${billboard.id}`,
+        `screen:${billboard.id}`
+      ];
+
+      for (const room of rooms) {
+        io.to(room).emit('billboard-details', detailsPayload);
+        io.to(room).emit('playlist', { screenId: billboard.id, playlist, date });
+        io.to(room).emit('assets', { screenId: billboard.id, assets });
+      }
+
+      logger.info(`[PUSH_LIVE] Force pushed live slots and assets to rooms: ${rooms.join(', ')}`);
+    } else {
+      logger.warn('[PUSH_LIVE] WebSocket io instance not found.');
+    }
+
+    res.json({ success: true, message: 'Live slots and assets pushed successfully to the device.' });
+  } catch (err) {
+    logger.error('Error force pushing live updates:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Delete billboard
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
