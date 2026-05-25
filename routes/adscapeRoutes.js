@@ -8,6 +8,9 @@ router.post('/adscape/register', adscapeController.registerPlayer);
 // Get a specific player by screenId
 router.get('/adscape/player/:screenId', adscapeController.getPlayer);
 
+// Get detailed player analytics
+router.get('/adscape/player/:screenId/analytics', adscapeController.getPlayerAnalytics);
+
 // Get all players
 router.get('/adscape/players', adscapeController.getAllPlayers);
 

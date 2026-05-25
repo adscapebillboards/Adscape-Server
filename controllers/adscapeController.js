@@ -262,3 +262,75 @@ exports.checkScreenAssignment = async (req, res) => {
         });
     }
 };
+
+/**
+ * Get detailed player analytics
+ * GET /api/adscape/player/:screenId/analytics
+ */
+exports.getPlayerAnalytics = async (req, res) => {
+    try {
+        const { screenId } = req.params;
+        
+        const player = await prisma.adscapePlayer.findUnique({
+            where: { screenId: String(screenId) }
+        });
+        
+        if (!player) {
+            return res.status(404).json({ error: 'Player not found' });
+        }
+        
+        // Fetch screen usage logs and play logs across all possible paired screen identifiers
+        const searchIds = [String(screenId)];
+        if (player.connectionCode) {
+            searchIds.push(String(player.connectionCode));
+        }
+        
+        const billboards = await prisma.billboard.findMany({
+            where: {
+                OR: [
+                    { screen_id: String(screenId) },
+                    ...(player.connectionCode ? [{ screen_id: String(player.connectionCode) }] : [])
+                ]
+            },
+            select: { screen_id: true, id: true }
+        });
+        
+        for (const b of billboards) {
+            if (b.screen_id) searchIds.push(String(b.screen_id));
+            if (b.id) searchIds.push(String(b.id));
+        }
+        
+        const uniqueSearchIds = Array.from(new Set(searchIds.filter(Boolean)));
+        
+        // Fetch screen usage logs from SQLite
+        const usageLogs = await prisma.screenUsage.findMany({
+            where: { screenId: { in: uniqueSearchIds } },
+            orderBy: { sessionStart: 'desc' },
+            take: 50
+        });
+        
+        // Fetch aggregated playback stats from SQLite
+        const playbackStats = await prisma.playbackStat.findMany({
+            where: { screenId: { in: uniqueSearchIds } },
+            orderBy: { lastPlayedAt: 'desc' }
+        });
+        
+        // Fetch detailed play logs
+        const detailedPlayLogs = await prisma.assetPlayLog.findMany({
+            where: { screenId: { in: uniqueSearchIds } },
+            orderBy: { playedAt: 'desc' },
+            take: 100
+        });
+        
+        return res.json({
+            success: true,
+            player,
+            usageLogs,
+            playbackStats,
+            detailedPlayLogs
+        });
+    } catch (e) {
+        logger.error('[ADSCAPE] Get player analytics error:', e);
+        return res.status(500).json({ error: 'Failed to retrieve player analytics' });
+    }
+};
