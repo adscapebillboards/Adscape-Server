@@ -112,7 +112,8 @@ router.patch('/:id/connect', async (req, res) => {
           name: billboard.name,
           location: billboard.location,
           city: billboard.city,
-          defaultImage: defaultAssetUrl
+          defaultImage: defaultAssetUrl,
+          cmsMode: Boolean(billboard.cmsMode)
         };
 
         // Emit to the old hardware ID room so the player showing the pairing screen gets it instantly

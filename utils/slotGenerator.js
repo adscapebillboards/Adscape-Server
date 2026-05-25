@@ -1,5 +1,6 @@
 const prisma = require('../db/db');
 const logger = require('../config/logger');
+const { triggerRealtimeSync } = require('../services/cmsModeService');
 const { getDeveloperMode } = require('./developerMode');
 const { buildSlotItem, flattenGeneratedSlotRecords, getDateKey } = require('./generatedSlotFormat');
 
@@ -261,6 +262,14 @@ async function generateSlots(campaign, options = {}) {
     });
 
     logger.info('Grouped slot generation completed for campaign:', campaign.id);
+
+    // Real-time synchronization for CMS mode screens
+    const uniqueScreenIds = [...new Set(screenIds)];
+    for (const screenId of uniqueScreenIds) {
+      if (screenId) {
+        await triggerRealtimeSync(screenId);
+      }
+    }
   } catch (error) {
     logger.error('Error in generateSlots function:', error);
     throw error;

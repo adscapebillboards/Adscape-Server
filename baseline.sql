@@ -88,6 +88,7 @@ CREATE TABLE "billboards" (
     "reason" TEXT[],
     "status" TEXT DEFAULT 'pending',
     "screen_id" TEXT,
+    "cms_mode" BOOLEAN DEFAULT false,
     "created_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
     "rejection_reason" TEXT,
     "updated_at" TIMESTAMP(3),

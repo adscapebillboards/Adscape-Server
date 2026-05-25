@@ -3,6 +3,7 @@ const logger = require('../config/logger');
 const { isSuperAdminRole } = require('../utils/roles');
 const EmailService = require('../services/emailService');
 const pushNotificationService = require('../services/pushNotificationService');
+const { triggerRealtimeSync } = require('../services/cmsModeService');
 
 
 // Helper to normalize billboard status to uppercase in API responses
@@ -390,6 +391,7 @@ exports.updateBillboard = async (req, res) => {
     if ('maxFileSize' in req.body) updateData.maxFileSize = req.body.maxFileSize ? parseInt(req.body.maxFileSize) : null;
     if ('max_video_size' in req.body) updateData.maxVideoSize = req.body.max_video_size ? parseInt(req.body.max_video_size) : null;
     if ('maxVideoSize' in req.body) updateData.maxVideoSize = req.body.maxVideoSize ? parseInt(req.body.maxVideoSize) : null;
+    if ('cmsMode' in req.body) updateData.cmsMode = Boolean(req.body.cmsMode);
 
     // Log what we're actually updating
     logger.billboard('Billboard update data', `ID: ${id}`, {
@@ -401,6 +403,9 @@ exports.updateBillboard = async (req, res) => {
       where: { id },
       data: updateData
     });
+
+    // Real-time synchronization for CMS mode
+    await triggerRealtimeSync(id);
 
     res.send('✅ Billboard updated');
   } catch (err) {
@@ -434,14 +439,19 @@ exports.updateBillboardPlayerDefaults = async (req, res) => {
     const defaultAssetDuration = 'defaultAssetDuration' in req.body ? Number(req.body.defaultAssetDuration) : undefined;
     const defaultAssetType = 'defaultAssetType' in req.body ? normalizeMediaType(req.body.defaultAssetType, defaultAssetUrl) : undefined;
     const slot10Enabled = 'slot10Enabled' in req.body ? Boolean(req.body.slot10Enabled) : undefined;
+    const cmsMode = 'cmsMode' in req.body ? Boolean(req.body.cmsMode) : undefined;
 
     const data = {};
     if (defaultAssetUrl !== undefined) data.defaultAssetUrl = defaultAssetUrl || null;
     if (defaultAssetType !== undefined) data.defaultAssetType = defaultAssetType;
     if (defaultAssetDuration !== undefined) data.defaultAssetDuration = Number.isFinite(defaultAssetDuration) && defaultAssetDuration > 0 ? Math.round(defaultAssetDuration) : null;
     if (slot10Enabled !== undefined) data.slot10Enabled = slot10Enabled;
+    if (cmsMode !== undefined) data.cmsMode = cmsMode;
 
     const updated = await prisma.billboard.update({ where: { id }, data });
+
+    // Real-time synchronization for CMS mode
+    await triggerRealtimeSync(id);
 
     // Broadcast playlist update to the player if connected
     const screenId = updated.screen_id;
@@ -492,6 +502,10 @@ exports.updateBillboardSlot10Asset = async (req, res) => {
     if (slot10AssetDuration !== undefined) data.slot10AssetDuration = Number.isFinite(slot10AssetDuration) && slot10AssetDuration > 0 ? Math.round(slot10AssetDuration) : null;
 
     const updated = await prisma.billboard.update({ where: { id }, data });
+    
+    // Real-time synchronization for CMS mode
+    await triggerRealtimeSync(id);
+    
     res.json({ success: true, billboard: toApiBillboard(updated) });
   } catch (err) {
     logger.error('updateBillboardSlot10Asset error', { id, error: err.message });
@@ -525,6 +539,9 @@ exports.updateTestCampaign = async (req, res) => {
     if (testCampaignUserId !== undefined) data.testCampaignUserId = testCampaignUserId;
 
     const updated = await prisma.billboard.update({ where: { id }, data });
+
+    // Real-time synchronization for CMS mode
+    await triggerRealtimeSync(id);
 
     // Broadcast playlist update to the player if connected
     const screenId = updated.screen_id;
@@ -636,6 +653,9 @@ exports.approveBillboard = async (req, res) => {
       '/#/inventory'
     ).catch((e) => logger.warn('Push notify failed after billboard approval:', e?.message));
 
+    // Real-time synchronization for CMS mode
+    await triggerRealtimeSync(id);
+
     res.json({
       message: '✅ Billboard approved successfully',
       billboard: {
@@ -737,6 +757,9 @@ exports.rejectBillboard = async (req, res) => {
       `${updatedBillboard.name || updatedBillboard.location || id} was rejected.`,
       '/#/inventory'
     ).catch((e) => logger.warn('Push notify failed after billboard rejection:', e?.message));
+
+    // Real-time synchronization for CMS mode
+    await triggerRealtimeSync(id);
 
     res.json({
       message: '❌ Billboard rejected successfully',

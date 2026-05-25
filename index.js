@@ -121,6 +121,8 @@ const io = new Server(server, {
 });
 
 
+global.io = io;
+
 // Push Notifications APIs
 app.use('/api', pushRoutes);
 
@@ -217,7 +219,8 @@ io.on('connection', (socket) => {
                         name: billboard.name,
                         location: billboard.location,
                         city: billboard.city,
-                        defaultImage: defaultAssetUrl
+                        defaultImage: defaultAssetUrl,
+                        cmsMode: Boolean(billboard.cmsMode)
                     });
                     console.log(`[SOCKET] Emitted billboard-details for screen: ${screenId}. Default: ${defaultAssetUrl}`);
                 }

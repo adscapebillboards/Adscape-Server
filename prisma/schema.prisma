@@ -124,6 +124,7 @@ model Billboard {
   reason               String[]
   status               String?   @default("pending")
   screen_id            String?
+  cmsMode              Boolean   @default(false) @map("cms_mode")
   createdAt            DateTime? @default(now()) @map("created_at")
   rejectionReason      String?   @map("rejection_reason")
   updatedAt            DateTime? @updatedAt @map("updated_at")
