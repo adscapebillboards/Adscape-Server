@@ -3,6 +3,7 @@ const logger = require('../config/logger');
 const { isSuperAdminRole } = require('../utils/roles');
 const { generateSlots: sharedGenerateSlots } = require('../utils/slotGenerator');
 const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
+const { recomputeAndUpsertForRange, ensureDefaultAvailabilityForTwoMonths, updateBillboardSlotAvailabilityJSON } = require('./availabilityController');
 
 const createCampaign = async (req, res) => {
   try {
@@ -146,6 +147,16 @@ const createCampaign = async (req, res) => {
         } catch (slotGenError) {
           logger.error('Error generating slots for offline campaign during creation:', slotGenError.message);
         }
+      }
+
+      // Automatically update the slot availability cache for the offline booking immediately
+      try {
+        await ensureDefaultAvailabilityForTwoMonths(String(dbBillboard.id));
+        await recomputeAndUpsertForRange(String(dbBillboard.id), startDate, endDate);
+        await updateBillboardSlotAvailabilityJSON(String(dbBillboard.id));
+        logger.info(`✅ Availability cache updated successfully for offline campaign billboard ${dbBillboard.id}`);
+      } catch (availError) {
+        logger.error(`Failed to update availability cache for offline campaign billboard ${dbBillboard.id}:`, availError.message);
       }
 
       logger.campaign('Offline campaign created successfully', `Campaign ID: ${campaign.id}, User: ${user.email}`);

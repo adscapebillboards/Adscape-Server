@@ -4,6 +4,35 @@ const prisma = require('../db/db');
 const logger = require('../config/logger');
 const { cascadeScreenIdUpdate } = require('../utils/billboardCascade');
 
+// Lookup player by connection code or screen ID
+router.get('/lookup-player/:code', async (req, res) => {
+  const { code } = req.params;
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ error: 'Pairing code is required' });
+  }
+
+  try {
+    const normalizedCode = code.trim();
+    const player = await prisma.adscapePlayer.findFirst({
+      where: {
+        OR: [
+          { connectionCode: normalizedCode },
+          { screenId: normalizedCode }
+        ]
+      }
+    });
+
+    if (!player) {
+      return res.status(404).json({ error: 'No player is found' });
+    }
+
+    res.json({ success: true, deviceName: player.deviceName || 'Unknown Device' });
+  } catch (err) {
+    logger.error('Error looking up player:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Delete billboard
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
