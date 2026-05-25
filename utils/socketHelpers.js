@@ -186,6 +186,7 @@ async function getPlaylistForScreen(screenId) {
                     let campaignId = null;
                     let assetUrl = globalUrl;
                     let durationSec = globalDuration;
+                    let shouldAddSlot = true;
 
                     if (i <= 8) {
                         // Rotation slots 1-8: Find if there's a generated slot for this slot number today
@@ -196,9 +197,8 @@ async function getPlaylistForScreen(screenId) {
                             durationSec = matchingSlot.duration || globalDuration;
                             console.log(`[SOCKET_HELPER] Assigned Slot #${i} to campaign ${campaignId} with asset ${assetUrl}`);
                         } else {
-                            // If no campaign assigned to this slot, use the default asset (Slot 9 config)
-                            assetUrl = s9Url;
-                            durationSec = s9Dur;
+                            // Unbooked commercial slot: skip so it doesn't play and default doesn't repeat
+                            shouldAddSlot = false;
                         }
                     } else if (i === 9) {
                         // Slot 9: Global Default Asset
@@ -210,15 +210,17 @@ async function getPlaylistForScreen(screenId) {
                         durationSec = s10Dur;
                     }
 
-                    slotsData.push({
-                        scheduleId: schedule.id,
-                        slotNumber: i,
-                        campaignId: campaignId,
-                        assetUrl: assetUrl,
-                        durationSec: durationSec,
-                        slotStart: new Date(),
-                        slotEnd: new Date()
-                    });
+                    if (shouldAddSlot) {
+                        slotsData.push({
+                            scheduleId: schedule.id,
+                            slotNumber: i,
+                            campaignId: campaignId,
+                            assetUrl: assetUrl,
+                            durationSec: durationSec,
+                            slotStart: new Date(),
+                            slotEnd: new Date()
+                        });
+                    }
                 }
                 await prisma.dailySlot.createMany({ data: slotsData });
                 console.log(`[SOCKET_HELPER] Created ${slotsData.length} slots. Assigned: ${slotsData.filter(s => s.campaignId).length}`);
@@ -357,14 +359,15 @@ async function getPlaylistForScreen(screenId) {
             }
         }
 
-        const assets = [...new Set(slots.map(s => s.assetUrl))];
+        const activeSlots = slots.filter(s => s.slotNumber === 9 || s.slotNumber === 10 || (s.campaignId !== null && s.campaignId !== undefined));
+        const assets = [...new Set(activeSlots.map(s => s.assetUrl))];
         const dateStr = scheduleDate.toISOString().split('T')[0];
-        console.log(`[SOCKET_HELPER] Returning playlist with ${slots.length} items for date ${dateStr}. Assets: ${assets.length}`);
-        if (slots.length > 0) {
-            console.log(`[SOCKET_HELPER] Sample Asset: ${slots[0].assetUrl}, campaignId: ${slots[0].campaignId}`);
+        console.log(`[SOCKET_HELPER] Returning playlist with ${activeSlots.length} items for date ${dateStr}. Assets: ${assets.length}`);
+        if (activeSlots.length > 0) {
+            console.log(`[SOCKET_HELPER] Sample Asset: ${activeSlots[0].assetUrl}, campaignId: ${activeSlots[0].campaignId}`);
         }
 
-        const playlist = slots.map(s => {
+        const playlist = activeSlots.map(s => {
             const mediaType = String(s.assetUrl || "").toLowerCase().endsWith('.mp4') ? 'video' : 'image';
             return {
                 id: s.id || `slot-${s.slotNumber}`,

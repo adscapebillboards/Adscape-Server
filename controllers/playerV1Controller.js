@@ -158,6 +158,7 @@ exports.getSchedule = async (req, res) => {
                 let campaignId = null;
                 let assetUrl = globalUrl;
                 let durationSec = globalDuration;
+                let shouldAddSlot = true;
 
                 if (i <= 8) {
                     // Rotation slots 1-8: Find if there's a generated slot for this slot number today
@@ -167,9 +168,8 @@ exports.getSchedule = async (req, res) => {
                         assetUrl = matchingSlot.assetUrl || globalUrl;
                         durationSec = matchingSlot.duration || globalDuration;
                     } else {
-                        // If no campaign assigned to this slot, use the default asset (Slot 9 config)
-                        assetUrl = s9Url;
-                        durationSec = s9Dur;
+                        // Unbooked commercial slot: skip so it doesn't play and default doesn't repeat
+                        shouldAddSlot = false;
                     }
                 } else if (i === 9) {
                     // Slot 9: Global Default Asset
@@ -181,15 +181,17 @@ exports.getSchedule = async (req, res) => {
                     durationSec = s10Dur;
                 }
 
-                slotsData.push({
-                    scheduleId: schedule.id,
-                    slotNumber: i,
-                    campaignId: campaignId,
-                    assetUrl: assetUrl,
-                    durationSec: durationSec,
-                    slotStart: new Date(),
-                    slotEnd: new Date()
-                });
+                if (shouldAddSlot) {
+                    slotsData.push({
+                        scheduleId: schedule.id,
+                        slotNumber: i,
+                        campaignId: campaignId,
+                        assetUrl: assetUrl,
+                        durationSec: durationSec,
+                        slotStart: new Date(),
+                        slotEnd: new Date()
+                    });
+                }
             }
 
             await prisma.dailySlot.createMany({ data: slotsData });
@@ -303,12 +305,14 @@ exports.getSchedule = async (req, res) => {
             screenId,
             date: scheduleDate.toISOString().split('T')[0], // YYYY-MM-DD
             timezone: 'Asia/Kolkata',
-            slots: slots.map(s => ({
-                slot: s.slotNumber,
-                campaignId: s.campaignId,
-                durationSec: s.durationSec,
-                assetUrl: s.assetUrl
-            }))
+            slots: slots
+                .filter(s => s.slotNumber === 9 || s.slotNumber === 10 || (s.campaignId !== null && s.campaignId !== undefined))
+                .map(s => ({
+                    slot: s.slotNumber,
+                    campaignId: s.campaignId,
+                    durationSec: s.durationSec,
+                    assetUrl: s.assetUrl
+                }))
         });
 
     } catch (e) {

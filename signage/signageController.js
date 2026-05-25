@@ -10,9 +10,16 @@ function inferMediaTypeFromUrl(url) {
 }
 
 function appendBillboardDefaults(assets, billboard) {
-    // Keep commercial slots untouched, but ensure slot 9/10 appear only once.
+    // Keep booked commercial slots, filter out unbooked commercial slots (1-8 with no campaignId)
+    // and ensure slot 9/10 appear only once.
     const list = [...assets].filter((asset) => {
         const slot = Number(asset?.slot_number ?? asset?.slotNumber ?? 0);
+        if (slot >= 1 && slot <= 8) {
+            return asset.campaignId !== null && 
+                   asset.campaignId !== undefined && 
+                   asset.campaignId !== 'default' &&
+                   asset.campaignId !== 'slot10';
+        }
         return slot !== 9 && slot !== 10;
     });
 
