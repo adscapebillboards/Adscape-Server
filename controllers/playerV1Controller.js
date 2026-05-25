@@ -1,6 +1,7 @@
 const prisma = require('../db/db');
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
+const { flattenGeneratedSlotRecords } = require('../utils/generatedSlotFormat');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'adscape_secret_key_123';
 
@@ -123,8 +124,22 @@ exports.getSchedule = async (req, res) => {
                 data: { screenId: resolvedScreenId, scheduleDate }
             });
 
+            // Load generated slots assignments from GeneratedSlot table for this billboard and today's date
+            const generatedSlotRecords = await prisma.generatedSlot.findMany();
+            const flatGeneratedSlots = flattenGeneratedSlotRecords(generatedSlotRecords, {
+                activeAt: scheduleDate
+            });
+
+            // Filter for slots that belong to this billboard
+            const billboardGeneratedSlots = flatGeneratedSlots.filter(s => {
+                return billboardIds.includes(String(s.billboardId)) || 
+                       (s.screenId && billboardIds.includes(String(s.screenId))) ||
+                       (s.screenIds && s.screenIds.some(sid => billboardIds.includes(String(sid))));
+            });
+
+            console.log(`[API_CONTROLLER] Found ${billboardGeneratedSlots.length} matching generated slots in GeneratedSlot table for screen ${resolvedScreenId} on ${date}`);
+
             const slotsData = [];
-            let rrIndex = 0;
 
             const globalDefault = await prisma.defaultAsset.findFirst({
                 where: { isActive: true },
@@ -133,51 +148,43 @@ exports.getSchedule = async (req, res) => {
             const globalUrl = globalDefault ? globalDefault.assetUrl : 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
             const globalDuration = globalDefault ? globalDefault.duration : 15;
 
+            // Slot 9 & 10 configurations
+            const s9Url = (billboard && billboard.defaultAssetUrl) ? billboard.defaultAssetUrl : globalUrl;
+            const s9Dur = (billboard && billboard.defaultAssetDuration) ? billboard.defaultAssetDuration : globalDuration;
+            const s10Url = (billboard && billboard.slot10Enabled && billboard.slot10AssetUrl) ? billboard.slot10AssetUrl : s9Url;
+            const s10Dur = (billboard && billboard.slot10Enabled && billboard.slot10AssetDuration) ? billboard.slot10AssetDuration : s9Dur;
+
             for (let i = 1; i <= 10; i++) {
-                let campaign = null;
+                let campaignId = null;
                 let assetUrl = globalUrl;
                 let durationSec = globalDuration;
 
                 if (i <= 8) {
-                    // Rotation slots 1-8
-                    if (activeCampaigns.length > 0) {
-                        campaign = activeCampaigns[rrIndex];
-                        rrIndex = (rrIndex + 1) % activeCampaigns.length;
-
-                        const bbs = typeof campaign.billboards === 'string' ? JSON.parse(campaign.billboards) : campaign.billboards;
-                        const bb = bbs.find(b => {
-                            const bId = String(b.id || b.billboardId || "");
-                            const bSid = String(b.screen_id || b.screenId || "");
-                            return billboardIds.includes(bId) || billboardIds.includes(bSid);
-                        });
-
-                        if (bb) {
-                            assetUrl = (bb.files && bb.files.length > 0) ? bb.files[0] :
-                                (bb.creative) ? bb.creative :
-                                    (bb.images && bb.images.length > 0) ? bb.images[0] :
-                                        (billboard && billboard.images && billboard.images.length > 0) ? billboard.images[0] :
-                                            globalUrl;
-                        }
+                    // Rotation slots 1-8: Find if there's a generated slot for this slot number today
+                    const matchingSlot = billboardGeneratedSlots.find(s => s.slotNumber === i);
+                    if (matchingSlot) {
+                        campaignId = matchingSlot.campaignId;
+                        assetUrl = matchingSlot.assetUrl || globalUrl;
+                        durationSec = matchingSlot.duration || globalDuration;
+                    } else {
+                        // If no campaign assigned to this slot, use the default asset (Slot 9 config)
+                        assetUrl = s9Url;
+                        durationSec = s9Dur;
                     }
                 } else if (i === 9) {
                     // Slot 9: Global Default Asset
-                    assetUrl = globalUrl;
-                    durationSec = globalDuration;
+                    assetUrl = s9Url;
+                    durationSec = s9Dur;
                 } else if (i === 10) {
-                    // Slot 10: Billboard Slot 10 or Global Default
-                    if (billboard && billboard.slot10Enabled && billboard.slot10AssetUrl) {
-                        assetUrl = billboard.slot10AssetUrl;
-                        durationSec = billboard.slot10AssetDuration || 15;
-                    } else {
-                        assetUrl = globalUrl;
-                        durationSec = globalDuration;
-                    }
+                    // Slot 10: Billboard Specific Overlay or Fallback to Slot 9
+                    assetUrl = s10Url;
+                    durationSec = s10Dur;
                 }
 
                 slotsData.push({
                     scheduleId: schedule.id,
                     slotNumber: i,
-                    campaignId: campaign ? campaign.id : null,
+                    campaignId: campaignId,
                     assetUrl: assetUrl,
                     durationSec: durationSec,
                     slotStart: new Date(),

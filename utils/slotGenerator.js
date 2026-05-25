@@ -124,7 +124,7 @@ async function generateSlots(campaign, options = {}) {
 
     for (const billboard of billboards) {
       const billboardId = String(billboard.id);
-      const assetUrl = billboard.files?.[0] || billboard.creative || billboard.images?.[0];
+      const assetUrl = billboard.files?.[0] || billboard.creative || billboard.images?.[0] || 'https://res.cloudinary.com/dh0ehlpkp/image/upload/v1772717423/Logo_ssxriy.png';
       const bookingStart = billboard.assetScheduling?.assetStartDate || billboard.bookingDetails?.startDate || billboard.startDate;
       const bookingEnd = billboard.assetScheduling?.assetEndDate || billboard.bookingDetails?.endDate || billboard.endDate;
 
