@@ -75,11 +75,6 @@ function limitString(value, maxLength) {
   return normalized.length > maxLength ? normalized.slice(0, maxLength) : normalized;
 }
 
-/**
- * Controller for modern Android Signage (v3) API.
- * Handles device registration, asset delivery, and analytics.
- */
-
 // 1. Device Registration (First Launch)
 // POST /signage/devices/register
 exports.registerDevice = async (req, res) => {
@@ -94,9 +89,19 @@ exports.registerDevice = async (req, res) => {
     const normalizedOsVersion = limitString(osVersion, 50);
     const normalizedAppVersionCode = limitString(appVersion, 20);
 
-    // Keep the pairing code stable across app redeploys if the client already has one.
-    const stableConnectionCode = normalizedConnectionCode
-      || Math.floor(1000000000 + Math.random() * 9000000000).toString();
+    // Keep the pairing code stable across app redeploys if the client already has one or server already registered.
+    let stableConnectionCode = normalizedConnectionCode;
+    if (!stableConnectionCode) {
+      const existingPlayer = await prisma.adscapePlayer.findUnique({
+        where: { screenId: normalizedDeviceId }
+      });
+      if (existingPlayer && existingPlayer.connectionCode) {
+        stableConnectionCode = existingPlayer.connectionCode;
+      }
+    }
+    if (!stableConnectionCode) {
+      stableConnectionCode = Math.floor(1000000000 + Math.random() * 9000000000).toString();
+    }
 
     const device = await prisma.adscapePlayer.upsert({
       where: { screenId: normalizedDeviceId },

@@ -50,14 +50,25 @@ async function getPlaylistForScreen(screenId) {
                 ? JSON.parse(billboard.testCampaignSlots)
                 : billboard.testCampaignSlots;
 
-            const playlist = testSlots.map((slot, index) => ({
-                slot: index + 1,
-                campaignId: slot.campaignId || null,
-                durationSec: slot.durationSec || 15,
-                assetUrl: slot.assetUrl || defaultUrl
-            }));
+            const playlist = testSlots.map((slot, index) => {
+                const mediaType = String(slot.assetUrl || "").toLowerCase().endsWith('.mp4') ? 'video' : 'image';
+                const sNumber = index + 1;
+                return {
+                    id: `test-slot-${sNumber}`,
+                    _id: `test-slot-${sNumber}`,
+                    url: slot.assetUrl || defaultUrl,
+                    asset_url: slot.assetUrl || defaultUrl,
+                    type: mediaType,
+                    media_type: mediaType,
+                    duration: slot.durationSec || 15,
+                    campaignId: slot.campaignId || 'test',
+                    campaign_id: slot.campaignId || 'test',
+                    slotNumber: sNumber,
+                    slot_number: sNumber
+                };
+            });
 
-            const assets = [...new Set(playlist.map(s => s.assetUrl))];
+            const assets = [...new Set(playlist.map(s => s.asset_url))];
             console.log(`[SOCKET_HELPER] Returning test playlist with ${playlist.length} items for date ${todayIST}`);
             return { playlist, assets, date: todayIST };
         }
@@ -353,12 +364,22 @@ async function getPlaylistForScreen(screenId) {
             console.log(`[SOCKET_HELPER] Sample Asset: ${slots[0].assetUrl}, campaignId: ${slots[0].campaignId}`);
         }
 
-        const playlist = slots.map(s => ({
-            slot: s.slotNumber,
-            campaignId: s.campaignId,
-            durationSec: s.durationSec,
-            assetUrl: s.assetUrl
-        }));
+        const playlist = slots.map(s => {
+            const mediaType = String(s.assetUrl || "").toLowerCase().endsWith('.mp4') ? 'video' : 'image';
+            return {
+                id: s.id || `slot-${s.slotNumber}`,
+                _id: s.id || `slot-${s.slotNumber}`,
+                url: s.assetUrl,
+                asset_url: s.assetUrl,
+                type: mediaType,
+                media_type: mediaType,
+                duration: s.durationSec,
+                campaignId: s.campaignId || 'default',
+                campaign_id: s.campaignId || 'default',
+                slotNumber: s.slotNumber,
+                slot_number: s.slotNumber
+            };
+        });
 
         return { playlist, assets, date: dateStr };
     } catch (error) {

@@ -157,7 +157,23 @@ exports.getBillboardById = async (req, res) => {
       return res.status(404).send('Not found');
     }
 
-    res.json(toApiBillboard(billboard));
+    const apiBillboard = toApiBillboard(billboard);
+
+    if (billboard.screen_id) {
+      const player = await prisma.adscapePlayer.findFirst({
+        where: {
+          OR: [
+            { screenId: billboard.screen_id },
+            { connectionCode: billboard.screen_id }
+          ]
+        }
+      });
+      if (player) {
+        apiBillboard.pairing_code = player.connectionCode;
+      }
+    }
+
+    res.json(apiBillboard);
   } catch (err) {
     res.status(500).send('Server Error');
   }
