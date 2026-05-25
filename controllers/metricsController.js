@@ -3,53 +3,196 @@ const logger = require('../config/logger');
 const { Prisma } = require('@prisma/client');
 
 // Per-campaign slot analytics (plays + minutes per day, optionally filtered by screenId)
+// Primary source: PlaybackAnalytics batch payloads (from Android player sync).
+// Fallback / supplement: asset_play_logs structured table.
 const getCampaignSlotAnalytics = async (req, res) => {
   const { campaignId } = req.params;
   const screenId = String(req.query?.screenId || '').trim();
+  const campaignIdShort = String(campaignId || '').slice(0, 8);
+  const debugTag = `[slot-analytics][campaign=${campaignId}][short=${campaignIdShort}][screen=${screenId || 'all'}]`;
 
   try {
     if (!campaignId) {
       return res.status(400).json({ error: 'campaignId is required' });
     }
 
-    // Note: we use raw SQL here to group by DATE(played_at).
-    const whereScreen = screenId ? Prisma.sql`AND screen_id = ${screenId}` : Prisma.empty;
+    // ── 1. Scan PlaybackAnalytics batch payloads ──────────────────────────────
+    // The Android player syncs rows as JSON batches into this table.
+    // Each payload.rows[] entry looks like:
+    //   { table: 'slot_playback', row: { campaign_id, asset_url, start_time, end_time, duration, slot_id } }
+    // Android app can write either screenId or deviceId depending on sync path.
+    const batchWhere = screenId
+      ? {
+          OR: [
+            { screenId: { in: [screenId] } },
+            { deviceId: { in: [screenId] } }
+          ]
+        }
+      : {};
 
-    const daily = await prisma.$queryRaw(Prisma.sql`
-      SELECT
-        DATE(played_at) AS date,
-        COUNT(1)::int AS plays,
-        COALESCE(SUM(COALESCE(duration_ms, 0)), 0)::bigint AS duration_ms
-      FROM asset_play_logs
-      WHERE campaign_id = ${campaignId}
-      ${whereScreen}
-      GROUP BY DATE(played_at)
-      ORDER BY DATE(played_at) ASC;
-    `);
+    const batches = await prisma.playbackAnalytics.findMany({
+      where: batchWhere,
+      orderBy: { receivedAt: 'asc' },
+      take: 500 // cap to avoid OOM on large history
+    });
+    logger.info(`${debugTag} batches=${batches.length}`);
 
-    const totals = await prisma.$queryRaw(Prisma.sql`
-      SELECT
-        COUNT(1)::int AS plays,
-        COALESCE(SUM(COALESCE(duration_ms, 0)), 0)::bigint AS duration_ms
-      FROM asset_play_logs
-      WHERE campaign_id = ${campaignId}
-      ${whereScreen};
-    `);
+    // Collect: dailyMap[dateStr] = {plays, durationMs}
+    //          assetMap[url]    = {assetUrl, plays, durationMs, lastPlayedAt}
+    const dailyMap = {};
+    const assetMap = {};
+    let batchTotalPlays = 0;
+    let batchTotalDurationMs = 0;
+    let batchRowsSeen = 0;
+    let batchRowsCampaignMatched = 0;
 
-    const totalRow = Array.isArray(totals) && totals.length > 0 ? totals[0] : { plays: 0, duration_ms: 0 };
+    for (const batch of batches) {
+      const payload = batch.payload || {};
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      batchRowsSeen += rows.length;
+
+      for (const r of rows) {
+        if (!r || r.table !== 'slot_playback' || !r.row) continue;
+        const row = r.row;
+
+        // Match campaign using Android-compatible heuristics:
+        // 1) row.campaign_id can be full or short id
+        // 2) row.slot_id often starts with campaign short id
+        const rowCid = String(row.campaign_id || '').trim();
+        const rowSlotId = String(row.slot_id || '').trim();
+        const cidShort = campaignId.slice(0, 8);
+        const campaignMatch =
+          rowCid === campaignId ||
+          rowCid === cidShort ||
+          rowSlotId.startsWith(`${cidShort}-`) ||
+          rowSlotId === cidShort;
+        if (!campaignMatch) continue;
+        batchRowsCampaignMatched += 1;
+
+        const playedAt = row.end_time ? new Date(row.end_time) : new Date(batch.receivedAt);
+        const durMs = Number.isFinite(row.duration) ? Math.round(row.duration * 1000) : 15000;
+        const dateKey = playedAt.toISOString().slice(0, 10); // YYYY-MM-DD
+        const assetUrl = String(row.asset_url || '').trim();
+
+        // daily aggregate
+        if (!dailyMap[dateKey]) dailyMap[dateKey] = { plays: 0, durationMs: 0 };
+        dailyMap[dateKey].plays += 1;
+        dailyMap[dateKey].durationMs += durMs;
+
+        // per-asset aggregate
+        if (!assetMap[assetUrl]) assetMap[assetUrl] = { assetUrl, plays: 0, durationMs: 0, lastPlayedAt: null };
+        assetMap[assetUrl].plays += 1;
+        assetMap[assetUrl].durationMs += durMs;
+        if (!assetMap[assetUrl].lastPlayedAt || playedAt > new Date(assetMap[assetUrl].lastPlayedAt)) {
+          assetMap[assetUrl].lastPlayedAt = playedAt.toISOString();
+        }
+
+        batchTotalPlays += 1;
+        batchTotalDurationMs += durMs;
+      }
+    }
+    logger.info(`${debugTag} batchRowsSeen=${batchRowsSeen} matched=${batchRowsCampaignMatched} batchPlays=${batchTotalPlays} batchDurationMs=${batchTotalDurationMs}`);
+
+    // ── 2. Also query asset_play_logs (legacy / structured path) ─────────────
+    let legacyDailyPlays = 0;
+    let legacyDurationMs = 0;
+    let legacyAssetPlays = 0;
+    let legacyAssetDurationMs = 0;
+    try {
+      const whereScreen = screenId ? Prisma.sql`AND screen_id = ${screenId}` : Prisma.empty;
+
+      const legacyRows = await prisma.$queryRaw(Prisma.sql`
+        SELECT
+          DATE(played_at)::text AS date,
+          COUNT(1)::int AS plays,
+          COALESCE(SUM(COALESCE(duration_ms, 0)), 0)::bigint AS duration_ms
+        FROM asset_play_logs
+        WHERE campaign_id IN (${campaignId}, ${campaignIdShort})
+        ${whereScreen}
+        GROUP BY DATE(played_at)
+        ORDER BY DATE(played_at) ASC;
+      `);
+
+      for (const row of (Array.isArray(legacyRows) ? legacyRows : [])) {
+        const dk = String(row.date).slice(0, 10);
+        const p = Number(row.plays || 0);
+        const d = Number(row.duration_ms || 0);
+        if (!dailyMap[dk]) dailyMap[dk] = { plays: 0, durationMs: 0 };
+        dailyMap[dk].plays += p;
+        dailyMap[dk].durationMs += d;
+        legacyDailyPlays += p;
+        legacyDurationMs += d;
+      }
+      logger.info(`${debugTag} legacyDailyRows=${Array.isArray(legacyRows) ? legacyRows.length : 0} plays=${legacyDailyPlays} durationMs=${legacyDurationMs}`);
+
+      // Per-asset breakdown from legacy table as well (this was missing before).
+      const legacyAssetRows = await prisma.$queryRaw(Prisma.sql`
+        SELECT
+          COALESCE(asset_url, '')::text AS asset_url,
+          COUNT(1)::int AS plays,
+          COALESCE(SUM(COALESCE(duration_ms, 0)), 0)::bigint AS duration_ms,
+          MAX(played_at) AS last_played_at
+        FROM asset_play_logs
+        WHERE campaign_id IN (${campaignId}, ${campaignIdShort})
+        ${whereScreen}
+        GROUP BY COALESCE(asset_url, '')
+        ORDER BY plays DESC;
+      `);
+
+      for (const row of (Array.isArray(legacyAssetRows) ? legacyAssetRows : [])) {
+        const assetUrl = String(row.asset_url || '').trim();
+        const plays = Number(row.plays || 0);
+        const durationMs = Number(row.duration_ms || 0);
+        const lastPlayedAt = row.last_played_at ? new Date(row.last_played_at).toISOString() : null;
+
+        if (!assetMap[assetUrl]) {
+          assetMap[assetUrl] = { assetUrl, plays: 0, durationMs: 0, lastPlayedAt: null };
+        }
+        assetMap[assetUrl].plays += plays;
+        assetMap[assetUrl].durationMs += durationMs;
+        if (lastPlayedAt && (!assetMap[assetUrl].lastPlayedAt || new Date(lastPlayedAt) > new Date(assetMap[assetUrl].lastPlayedAt))) {
+          assetMap[assetUrl].lastPlayedAt = lastPlayedAt;
+        }
+
+        legacyAssetPlays += plays;
+        legacyAssetDurationMs += durationMs;
+      }
+      logger.info(`${debugTag} legacyAssetRows=${Array.isArray(legacyAssetRows) ? legacyAssetRows.length : 0} plays=${legacyAssetPlays} durationMs=${legacyAssetDurationMs}`);
+    } catch (legacyErr) {
+      logger.warn('[metrics] asset_play_logs query skipped:', legacyErr?.message);
+    }
+
+    // ── 3. Build response ─────────────────────────────────────────────────────
+    const dailyArray = Object.entries(dailyMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, v]) => ({
+        date,
+        plays: v.plays,
+        minutes: Math.round(v.durationMs / 60000)
+      }));
+
+    const assetBreakdown = Object.values(assetMap)
+      .sort((a, b) => b.plays - a.plays)
+      .map(a => ({
+        assetUrl: a.assetUrl,
+        plays: a.plays,
+        minutes: Math.round(a.durationMs / 60000),
+        lastPlayedAt: a.lastPlayedAt
+      }));
+
+    const totalPlays = Math.max(batchTotalPlays + legacyDailyPlays, batchTotalPlays + legacyAssetPlays);
+    const totalDurationMs = Math.max(batchTotalDurationMs + legacyDurationMs, batchTotalDurationMs + legacyAssetDurationMs);
+    logger.info(`${debugTag} response daily=${dailyArray.length} assets=${assetBreakdown.length} totalPlays=${totalPlays} totalMinutes=${Math.round(totalDurationMs / 60000)}`);
 
     return res.json({
       campaignId,
       screenId: screenId || null,
       totals: {
-        plays: Number(totalRow.plays || 0),
-        minutes: Math.round(Number(totalRow.duration_ms || 0) / 60000)
+        plays: totalPlays,
+        minutes: Math.round(totalDurationMs / 60000)
       },
-      daily: (Array.isArray(daily) ? daily : []).map((row) => ({
-        date: String(row.date),
-        plays: Number(row.plays || 0),
-        minutes: Math.round(Number(row.duration_ms || 0) / 60000)
-      }))
+      daily: dailyArray,
+      assetBreakdown
     });
   } catch (err) {
     logger.error('Error in campaign slot analytics:', err);

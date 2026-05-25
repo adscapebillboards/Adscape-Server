@@ -302,25 +302,76 @@ exports.getPlayerAnalytics = async (req, res) => {
         
         const uniqueSearchIds = Array.from(new Set(searchIds.filter(Boolean)));
         
-        // Fetch screen usage logs from SQLite
-        const usageLogs = await prisma.screenUsage.findMany({
-            where: { screenId: { in: uniqueSearchIds } },
-            orderBy: { sessionStart: 'desc' },
-            take: 50
-        });
-        
-        // Fetch aggregated playback stats from SQLite
-        const playbackStats = await prisma.playbackStat.findMany({
-            where: { screenId: { in: uniqueSearchIds } },
-            orderBy: { lastPlayedAt: 'desc' }
-        });
-        
-        // Fetch detailed play logs
-        const detailedPlayLogs = await prisma.assetPlayLog.findMany({
-            where: { screenId: { in: uniqueSearchIds } },
-            orderBy: { playedAt: 'desc' },
+        // Fetch raw playback analytics sync batches from PlaybackAnalytics model
+        const batches = await prisma.playbackAnalytics.findMany({
+            where: {
+                OR: [
+                    { deviceId: { in: uniqueSearchIds } },
+                    { screenId: { in: uniqueSearchIds } }
+                ]
+            },
+            orderBy: { receivedAt: 'desc' },
             take: 100
         });
+
+        const detailedPlayLogs = [];
+        const statMap = new Map();
+        const usageLogs = [];
+        const uniqueDates = new Set();
+
+        for (const batch of batches) {
+            const payload = batch.payload || {};
+            const rows = Array.isArray(payload.rows) ? payload.rows : [];
+            
+            // Extract detailed play logs from each batch payload
+            for (const r of rows) {
+                if (r && r.table === 'slot_playback' && r.row) {
+                    const row = r.row;
+                    const playedAtTime = new Date(row.end_time || batch.receivedAt);
+                    const log = {
+                        id: detailedPlayLogs.length + 1,
+                        playedAt: playedAtTime,
+                        assetUrl: row.asset_url || '',
+                        campaignId: row.campaign_id || null,
+                        durationMs: Number.isFinite(row.duration) ? Math.round(row.duration * 1000) : 15000,
+                        success: true
+                    };
+                    detailedPlayLogs.push(log);
+
+                    // Aggregate playback stats on-the-fly
+                    const assetKey = log.assetUrl;
+                    const durSec = Number.isFinite(row.duration) ? row.duration : 15;
+                    if (!statMap.has(assetKey)) {
+                        statMap.set(assetKey, {
+                            id: statMap.size + 1,
+                            assetId: assetKey,
+                            playCount: 0,
+                            totalDuration: 0,
+                            lastPlayedAt: playedAtTime
+                        });
+                    }
+                    const stat = statMap.get(assetKey);
+                    stat.playCount += 1;
+                    stat.totalDuration += durSec;
+                    if (playedAtTime > new Date(stat.lastPlayedAt)) {
+                        stat.lastPlayedAt = playedAtTime;
+                    }
+                }
+            }
+
+            // Synthesize screen usage logs from the batch checkpoints
+            const dateStr = new Date(batch.receivedAt).toDateString();
+            if (!uniqueDates.has(dateStr)) {
+                uniqueDates.add(dateStr);
+                usageLogs.push({
+                    id: usageLogs.length + 1,
+                    sessionStart: batch.receivedAt,
+                    durationSec: Math.max(60, batch.rowCount * 15)
+                });
+            }
+        }
+
+        const playbackStats = Array.from(statMap.values());
         
         return res.json({
             success: true,
