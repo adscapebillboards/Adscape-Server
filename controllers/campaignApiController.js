@@ -1833,13 +1833,43 @@ const createCashfreeOrder = async (req, res) => {
   const axios = require('axios');
   const { campaignId } = req.body;
   const userEmail = req.user?.email || 'test@example.com';
-  const userName = req.user?.fullName || req.user?.name || 'Customer';
-  const userPhone = req.user?.phoneNumber || '9999999999';
 
   logger.info(`=== CREATE CASHFREE ORDER REQUEST ===`);
   logger.info(`Campaign ID: ${campaignId}, User: ${userEmail}`);
 
   try {
+    // Fetch customer details from database to avoid fallback placeholders
+    let dbUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: userEmail },
+          { id: Number(req.user?.id || 0) }
+        ]
+      }
+    });
+
+    let userName = dbUser?.fullName || 'Customer';
+    let rawPhone = dbUser?.phoneNumber || '9999999999';
+
+    if (!dbUser) {
+      // Try searching in publishers table as fallback
+      const dbPublisher = await prisma.publisher.findFirst({
+        where: { email: userEmail }
+      });
+      if (dbPublisher) {
+        userName = dbPublisher.name;
+        rawPhone = dbPublisher.phone;
+      }
+    }
+
+    let userPhone = rawPhone.replace(/\D/g, '');
+    // Ensure phone number length is standard and valid for Cashfree
+    if (userPhone.length < 10) {
+      userPhone = '9999999999';
+    } else {
+      // Take last 10 digits
+      userPhone = userPhone.slice(-10);
+    }
     const campaign = await prisma.campaign.findUnique({
       where: { id: campaignId }
     });
@@ -1850,8 +1880,8 @@ const createCashfreeOrder = async (req, res) => {
     }
 
     const subtotal = Number(campaign.totalAmount || 0);
-    const tax = Math.round(subtotal * 0.18);
-    const totalAmount = subtotal + tax;
+    const tax = Number((subtotal * 0.18).toFixed(2));
+    const totalAmount = Number((subtotal + tax).toFixed(2));
 
     // Generate unique order ID linked to campaign ID
     const cashfreeOrderId = `order_${campaignId}_${Date.now()}`;
