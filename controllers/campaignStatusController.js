@@ -41,7 +41,7 @@ const updateCampaignStatusByDate = async (campaignId) => {
     let updatedBillboards = [];
 
     // Valid statuses that can undergo date-based transitions
-    const validPrecursors = ['APPROVED', 'PAYMENT_COMPLETED', 'SCHEDULED', 'LIVE', 'COMPLETED'];
+    const validPrecursors = ['PAYMENT_COMPLETED', 'SCHEDULED', 'LIVE', 'COMPLETED'];
     if (!validPrecursors.includes(currentStatus)) {
       logger.info(`⏭️ Campaign ${campaignId} is in ${currentStatus} status. Skipping date-based status update.`);
       return {
@@ -132,11 +132,11 @@ const updateAllCampaignsStatusByDate = async () => {
   try {
     logger.info('Starting batch update of all campaigns status by date');
     
-    // Get only campaigns that are APPROVED, PAYMENT_COMPLETED or later
+    // Get only campaigns that are PAYMENT_COMPLETED or later
     const campaigns = await prisma.campaign.findMany({
       where: {
         status: {
-          in: ['APPROVED', 'PAYMENT_COMPLETED', 'SCHEDULED', 'LIVE', 'COMPLETED']
+          in: ['PAYMENT_COMPLETED', 'SCHEDULED', 'LIVE', 'COMPLETED']
         }
       }
     });
