@@ -19,11 +19,17 @@ const {
   deleteCampaign,
   deleteBillboardFromCampaign,
   completePayment,
-  attachCampaignFile
+  attachCampaignFile,
+  createCashfreeOrder,
+  verifyCashfreePayment
 } = require('../controllers/campaignApiController');
 
 // Campaign creation — JSON body only (fast path, no file upload blocking)
 router.post('/create-campaign', auth, createCampaign);
+
+// Cashfree Payment gateway routes
+router.post('/payment/cashfree/create-order', auth, createCashfreeOrder);
+router.post('/payment/cashfree/verify', auth, verifyCashfreePayment);
 
 // Attach a file URL to a campaign billboard (called after async TUS upload completes)
 router.post('/campaigns/:id/attach-file', auth, attachCampaignFile);

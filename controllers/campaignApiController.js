@@ -1828,6 +1828,230 @@ const deleteBillboardFromCampaign = async (req, res) => {
   }
 };
 
+// Create Cashfree Order
+const createCashfreeOrder = async (req, res) => {
+  const axios = require('axios');
+  const { campaignId } = req.body;
+  const userEmail = req.user?.email || 'test@example.com';
+  const userName = req.user?.fullName || req.user?.name || 'Customer';
+  const userPhone = req.user?.phoneNumber || '9999999999';
+
+  logger.info(`=== CREATE CASHFREE ORDER REQUEST ===`);
+  logger.info(`Campaign ID: ${campaignId}, User: ${userEmail}`);
+
+  try {
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: campaignId }
+    });
+
+    if (!campaign) {
+      logger.error(`Campaign ${campaignId} not found`);
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    const subtotal = Number(campaign.totalAmount || 0);
+    const tax = Math.round(subtotal * 0.18);
+    const totalAmount = subtotal + tax;
+
+    // Generate unique order ID linked to campaign ID
+    const cashfreeOrderId = `order_${campaignId}_${Date.now()}`;
+
+    const cashfreeUrl = process.env.CASHFREE_ENV === 'production' 
+      ? 'https://api.cashfree.com/pg/orders' 
+      : 'https://sandbox.cashfree.com/pg/orders';
+
+    logger.info(`Creating Cashfree order with amount ${totalAmount} on ${cashfreeUrl}`);
+
+    const response = await axios.post(
+      cashfreeUrl,
+      {
+        order_amount: totalAmount,
+        order_currency: 'INR',
+        order_id: cashfreeOrderId,
+        customer_details: {
+          customer_id: `cust_${userEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
+          customer_phone: userPhone.startsWith('+') ? userPhone : `+91${userPhone}`.slice(-13),
+          customer_email: userEmail,
+          customer_name: userName
+        },
+        order_meta: {
+          // Point return_url to front-end hash router page
+          return_url: `${req.headers.origin || 'https://adscape.co.in'}/#/campaign/${campaignId}/payment?order_id={order_id}`
+        }
+      },
+      {
+        headers: {
+          'x-client-id': process.env.CASHFREE_APP_ID || '12914765da53744e491fec3d14d6741921',
+          'x-client-secret': process.env.CASHFREE_SECRET_KEY || 'cfsk_ma_prod_7576b0b4d5925dd9baa3aab7500ab16a_a099bd63',
+          'x-api-version': '2023-08-01',
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    logger.info(`Cashfree Order created successfully. Session ID: ${response.data.payment_session_id}`);
+    
+    res.json({
+      success: true,
+      payment_session_id: response.data.payment_session_id,
+      order_id: cashfreeOrderId,
+      order_amount: totalAmount
+    });
+  } catch (err) {
+    logger.error('Error creating Cashfree order:', err.response?.data || err.message);
+    res.status(500).json({
+      error: 'Failed to create payment order',
+      details: err.response?.data || err.message
+    });
+  }
+};
+
+// Verify Cashfree Payment status
+const verifyCashfreePayment = async (req, res) => {
+  const axios = require('axios');
+  const { orderId, campaignId } = req.body;
+
+  logger.info(`=== VERIFY CASHFREE PAYMENT REQUEST ===`);
+  logger.info(`Order ID: ${orderId}, Campaign ID: ${campaignId}`);
+
+  try {
+    const cashfreeUrl = process.env.CASHFREE_ENV === 'production' 
+      ? `https://api.cashfree.com/pg/orders/${orderId}` 
+      : `https://sandbox.cashfree.com/pg/orders/${orderId}`;
+
+    const response = await axios.get(cashfreeUrl, {
+      headers: {
+        'x-client-id': process.env.CASHFREE_APP_ID || '12914765da53744e491fec3d14d6741921',
+        'x-client-secret': process.env.CASHFREE_SECRET_KEY || 'cfsk_ma_prod_7576b0b4d5925dd9baa3aab7500ab16a_a099bd63',
+        'x-api-version': '2023-08-01'
+      }
+    });
+
+    const orderData = response.data;
+    logger.info(`Cashfree Order verification status: ${orderData.order_status}`);
+
+    if (orderData.order_status === 'PAID') {
+      logger.info(`Payment successful for Order: ${orderId}, Campaign: ${campaignId}. Activating campaign...`);
+
+      const currentCampaign = await prisma.campaign.findUnique({
+        where: { id: campaignId }
+      });
+
+      if (!currentCampaign) {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+
+      if (currentCampaign.status === 'PAYMENT_COMPLETED' || currentCampaign.status === 'SCHEDULED' || currentCampaign.status === 'LIVE') {
+        logger.info(`Campaign ${campaignId} already activated/scheduled. Skipping.`);
+        return res.json({
+          success: true,
+          message: 'Payment already verified and processed.',
+          status: currentCampaign.status
+        });
+      }
+
+      const campaignWithBillboards = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        select: {
+          id: true,
+          billboards: true,
+          startDate: true,
+          endDate: true,
+          campaignName: true
+        }
+      });
+
+      if (campaignWithBillboards) {
+        try {
+          let parsedBillboards = campaignWithBillboards.billboards;
+          if (typeof parsedBillboards === 'string') {
+            parsedBillboards = JSON.parse(parsedBillboards);
+          }
+
+          if (Array.isArray(parsedBillboards) && parsedBillboards.length > 0) {
+            const campaignStartDate = campaignWithBillboards.startDate;
+            const campaignEndDate = campaignWithBillboards.endDate;
+
+            const toISTDateString = (d) => {
+              if (!d) return null;
+              const dt = new Date(d);
+              const ist = dt.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
+              const [m, day, y] = ist.split('/');
+              return `${y}-${m}-${day}`;
+            };
+
+            const campaignStartStr = toISTDateString(campaignStartDate);
+            const campaignEndStr = toISTDateString(campaignEndDate);
+
+            const enrichedBillboards = parsedBillboards.map((bb) => {
+              const bdStart = bb.bookingDetails?.startDate || bb.startDate;
+              const bdEnd = bb.bookingDetails?.endDate || bb.endDate;
+              return {
+                ...bb,
+                bookingDetails: {
+                  startDate: bdStart || campaignStartStr,
+                  endDate: bdEnd || campaignEndStr,
+                },
+                startDate: bdStart || campaignStartStr,
+                endDate: bdEnd || campaignEndStr,
+              };
+            });
+
+            await generateSlots({
+              ...campaignWithBillboards,
+              billboards: enrichedBillboards
+            });
+            logger.campaign('Slots generated successfully after payment verification', `Campaign ID: ${campaignId}`);
+          }
+        } catch (slotGenError) {
+          logger.error('Error generating slots after payment verification:', slotGenError.message);
+        }
+      }
+
+      let finalStatus = 'PAYMENT_COMPLETED';
+      let startDateToCheck = campaignWithBillboards?.startDate || currentCampaign.startDate;
+
+      if (startDateToCheck) {
+        const now = new Date();
+        const startDate = new Date(startDateToCheck);
+        if (!isNaN(startDate.getTime())) {
+          if (now < startDate) {
+            finalStatus = 'SCHEDULED';
+          } else {
+            finalStatus = 'LIVE';
+          }
+        }
+      }
+
+      const updatedCampaign = await prisma.campaign.update({
+        where: { id: campaignId },
+        data: { status: finalStatus }
+      });
+
+      logger.info(`Campaign ${campaignId} successfully updated to status: ${updatedCampaign.status}`);
+
+      return res.json({
+        success: true,
+        message: 'Payment verified and campaign activated/scheduled.',
+        status: updatedCampaign.status
+      });
+    } else {
+      logger.warn(`Payment not completed for Order: ${orderId}. Current status: ${orderData.order_status}`);
+      return res.status(400).json({
+        success: false,
+        message: `Payment status is ${orderData.order_status}`,
+        orderStatus: orderData.order_status
+      });
+    }
+  } catch (err) {
+    logger.error('Error verifying Cashfree payment:', err.response?.data || err.message);
+    res.status(500).json({
+      error: 'Failed to verify payment',
+      details: err.response?.data || err.message
+    });
+  }
+};
+
 module.exports = {
   createCampaign,
   getCampaignsByUser,
@@ -1844,5 +2068,7 @@ module.exports = {
   updateUserStatistics,
   updateCampaignStatusBasedOnBillboards,
   completePayment,
-  attachCampaignFile
+  attachCampaignFile,
+  createCashfreeOrder,
+  verifyCashfreePayment
 }; 
